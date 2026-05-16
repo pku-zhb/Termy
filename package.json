@@ -2,7 +2,7 @@
   "name": "termy",
   "version": "1.3.7",
   "type": "module",
-  "description": "Full terminal emulator with split panes, preset scripts, multiple shells, and native Rust PTY backend.",
+  "description": "Terminal emulator with split panes, reusable workflows, AI CLI context handoff, and zero setup. Powered by xterm.js and a bundled Rust PTY backend.",
   "main": "main.js",
   "packageManager": "pnpm@10.0.0",
   "scripts": {
