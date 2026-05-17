@@ -1,9 +1,8 @@
 import type { View, WorkspaceLeaf } from 'obsidian';
-import { addIcon, FileSystemAdapter, Notice, Plugin, normalizePath, setIcon } from 'obsidian';
+import { addIcon, FileSystemAdapter, Modal, Notice, Plugin, normalizePath, setIcon, setTooltip } from 'obsidian';
 import {
   DEFAULT_PRESET_SCRIPTS,
   DEFAULT_TERMINAL_SETTINGS,
-  normalizePresetScriptsByCurrentDefaults,
   type PresetScript,
   type PresetWorkflowAction,
   type TerminalSettings,
@@ -403,18 +402,21 @@ export default class TerminalPlugin extends Plugin {
       ? value.map((script: PresetScript) => this.normalizePresetScript(script))
       : [];
     const existingIds = new Set(scripts.map((script) => script.id));
-    const merged = [...scripts];
 
+    // Seed missing built-in workflows. This happens on first install or if a
+    // user has deleted a built-in workflow — it's a one-time recovery, not a
+    // continuous "reset to defaults". Once seeded, the user's saved version
+    // is the source of truth.
     for (const builtInScript of DEFAULT_PRESET_SCRIPTS) {
       if (existingIds.has(builtInScript.id)) {
         continue;
       }
 
-      merged.push(this.clonePresetScript(builtInScript));
+      scripts.push(this.clonePresetScript(builtInScript));
       existingIds.add(builtInScript.id);
     }
 
-    return normalizePresetScriptsByCurrentDefaults(merged);
+    return scripts;
   }
 
   private clonePresetScript(script: PresetScript): PresetScript {
@@ -1565,6 +1567,60 @@ export default class TerminalPlugin extends Plugin {
     modal.open();
   }
 
+  private openPresetScriptEditModal(script: PresetScript): void {
+    const clone = this.clonePresetScript(script);
+    const modal = new PresetScriptModal(this.app, clone, (updatedScript: PresetScript) => {
+      const scripts = this.settings.presetScripts ?? [];
+      const index = scripts.findIndex(item => item.id === updatedScript.id);
+      if (index >= 0) {
+        scripts[index] = updatedScript;
+      }
+      this.settings.presetScripts = scripts;
+      void this.saveSettings();
+    }, false);
+    modal.open();
+  }
+
+  private buildPresetScriptTooltip(script: PresetScript): string {
+    const name = script.name?.trim() || t('settingsDetails.terminal.presetScriptsUnnamed');
+    const actions = Array.isArray(script.actions) ? script.actions : [];
+    const enabledActions = actions.filter((action) => action.enabled !== false);
+
+    if (enabledActions.length === 0) {
+      return name;
+    }
+
+    const lines = enabledActions.map((action) => {
+      const prefix = action.type === 'obsidian-command'
+        ? 'Obsidian'
+        : action.type === 'open-external'
+          ? 'URL'
+          : 'Terminal';
+      const value = (action.value ?? '').trim();
+      return value ? `${prefix}: ${value}` : prefix;
+    });
+
+    return `${name}\n${lines.join('\n')}`;
+  }
+
+  private confirmAndDeletePresetScript(scriptId: string, scriptName: string): void {
+    const modal = new Modal(this.app);
+    modal.titleEl.setText(t('common.confirm'));
+    modal.contentEl.createEl('p', {
+      text: t('settingsDetails.terminal.presetScriptsDeleteConfirm', { name: scriptName }),
+    });
+    const buttonContainer = modal.contentEl.createDiv({ cls: 'modal-button-container' });
+    const cancelBtn = buttonContainer.createEl('button', { cls: 'mod-cancel', text: t('common.cancel') });
+    cancelBtn.addEventListener('click', () => modal.close());
+    const confirmBtn = buttonContainer.createEl('button', { cls: 'mod-cta', text: t('common.confirm') });
+    confirmBtn.addEventListener('click', () => {
+      modal.close();
+      this.settings.presetScripts = (this.settings.presetScripts ?? []).filter(s => s.id !== scriptId);
+      void this.saveSettings();
+    });
+    modal.open();
+  }
+
   private togglePresetScriptsMenu(event: MouseEvent): void {
     if (this._presetScriptsMenuEl) {
       this.closePresetScriptsMenu();
@@ -1658,10 +1714,22 @@ export default class TerminalPlugin extends Plugin {
       listEl.appendChild(empty);
     }
 
+    // Drag-and-drop state
+    let draggedItem: HTMLElement | null = null;
+    let draggedScriptId: string | null = null;
+
     visibleScripts.forEach((script) => {
       const item = activeDocument.createElement('div');
       item.className = 'preset-scripts-menu-item';
       item.setAttribute('role', 'menuitem');
+      item.setAttribute('draggable', 'true');
+      item.dataset.scriptId = script.id;
+
+      // Drag handle indicator
+      const dragHandle = activeDocument.createElement('div');
+      dragHandle.className = 'preset-scripts-menu-drag-handle';
+      setIcon(dragHandle, 'grip-vertical');
+      item.appendChild(dragHandle);
 
       const iconEl = activeDocument.createElement('div');
       iconEl.className = 'preset-scripts-menu-icon';
@@ -1673,6 +1741,107 @@ export default class TerminalPlugin extends Plugin {
 
       item.appendChild(iconEl);
       item.appendChild(labelEl);
+
+      // Tooltip with name and actions (multi-line)
+      setTooltip(item, this.buildPresetScriptTooltip(script), {
+        placement: 'top',
+        classes: ['preset-script-tooltip'],
+      });
+
+      // Action buttons (edit / delete)
+      const actionsEl = activeDocument.createElement('div');
+      actionsEl.className = 'preset-scripts-menu-actions';
+
+      const editBtn = activeDocument.createElement('button');
+      editBtn.className = 'preset-scripts-menu-action-btn';
+      editBtn.setAttribute('aria-label', t('modals.presetScript.titleEdit'));
+      setIcon(editBtn, 'pencil');
+      editBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.closePresetScriptsMenu();
+        this.openPresetScriptEditModal(script);
+      });
+      actionsEl.appendChild(editBtn);
+
+      const isBuiltIn = DEFAULT_PRESET_SCRIPTS.some(d => d.id === script.id);
+      if (!isBuiltIn) {
+        const deleteBtn = activeDocument.createElement('button');
+        deleteBtn.className = 'preset-scripts-menu-action-btn preset-scripts-menu-action-delete';
+        deleteBtn.setAttribute('aria-label', t('common.delete'));
+        setIcon(deleteBtn, 'trash');
+        deleteBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          this.closePresetScriptsMenu();
+          const scriptName = script.name?.trim() || t('settingsDetails.terminal.presetScriptsUnnamed');
+          this.confirmAndDeletePresetScript(script.id, scriptName);
+        });
+        actionsEl.appendChild(deleteBtn);
+      }
+
+      item.appendChild(actionsEl);
+
+      // Drag events
+      item.addEventListener('dragstart', (e) => {
+        draggedItem = item;
+        draggedScriptId = script.id;
+        item.addClass('is-dragging');
+        if (e.dataTransfer) {
+          e.dataTransfer.effectAllowed = 'move';
+          e.dataTransfer.setData('text/plain', script.id);
+        }
+      });
+
+      item.addEventListener('dragend', () => {
+        if (draggedItem) {
+          draggedItem.removeClass('is-dragging');
+        }
+        draggedItem = null;
+        draggedScriptId = null;
+        // Remove all drop indicators
+        listEl.querySelectorAll('.preset-scripts-menu-item').forEach(el => {
+          (el as HTMLElement).removeClass('drag-over-above');
+          (el as HTMLElement).removeClass('drag-over-below');
+        });
+      });
+
+      item.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        if (!draggedItem || draggedScriptId === script.id) return;
+        if (e.dataTransfer) {
+          e.dataTransfer.dropEffect = 'move';
+        }
+        const rect = item.getBoundingClientRect();
+        const midY = rect.top + rect.height / 2;
+        // Remove indicators from all items
+        listEl.querySelectorAll('.preset-scripts-menu-item').forEach(el => {
+          (el as HTMLElement).removeClass('drag-over-above');
+          (el as HTMLElement).removeClass('drag-over-below');
+        });
+        if (e.clientY < midY) {
+          item.addClass('drag-over-above');
+        } else {
+          item.addClass('drag-over-below');
+        }
+      });
+
+      item.addEventListener('dragleave', () => {
+        item.removeClass('drag-over-above');
+        item.removeClass('drag-over-below');
+      });
+
+      item.addEventListener('drop', (e) => {
+        e.preventDefault();
+        item.removeClass('drag-over-above');
+        item.removeClass('drag-over-below');
+        if (!draggedScriptId || draggedScriptId === script.id) return;
+
+        const rect = item.getBoundingClientRect();
+        const midY = rect.top + rect.height / 2;
+        const insertBefore = e.clientY < midY;
+
+        this.reorderPresetScript(draggedScriptId, script.id, insertBefore);
+      });
+
       item.addEventListener('click', () => {
         this.closePresetScriptsMenu();
         this.runPresetScript(script).catch((error) => {
@@ -1701,6 +1870,32 @@ export default class TerminalPlugin extends Plugin {
     menu.appendChild(footerEl);
 
     return menu;
+  }
+
+  private reorderPresetScript(draggedId: string, targetId: string, insertBefore: boolean): void {
+    const scripts = [...(this.settings.presetScripts ?? [])];
+    const draggedIndex = scripts.findIndex(s => s.id === draggedId);
+    if (draggedIndex < 0) return;
+
+    const [dragged] = scripts.splice(draggedIndex, 1);
+    let targetIndex = scripts.findIndex(s => s.id === targetId);
+    if (targetIndex < 0) {
+      scripts.push(dragged);
+    } else {
+      if (!insertBefore) {
+        targetIndex += 1;
+      }
+      scripts.splice(targetIndex, 0, dragged);
+    }
+
+    this.settings.presetScripts = scripts;
+    void this.saveSettings();
+    // Rebuild the menu to reflect new order
+    this.closePresetScriptsMenu();
+    const anchorRect = this._statusBarItem?.getBoundingClientRect();
+    if (anchorRect) {
+      this.showPresetScriptsMenuAtRect(anchorRect);
+    }
   }
 
   private closePresetScriptsMenu(): void {

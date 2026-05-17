@@ -6,7 +6,6 @@ import {
   DEFAULT_PRESET_SCRIPTS,
   OPENCODE_LAUNCH_COMMAND,
   isContextAwarePresetScript,
-  normalizePresetScriptsByCurrentDefaults,
 } from './settings.ts';
 
 test('Codex built-in launcher starts Codex without prompt injection', () => {
@@ -25,97 +24,19 @@ test('OpenCode built-in launcher starts the IDE bridge client directly', () => {
   assert.equal(launchAction?.value, OPENCODE_LAUNCH_COMMAND);
 });
 
-test('built-in workflow order keeps OpenCode third and Gemini fourth', () => {
+test('built-in workflow order keeps Claude Code, Codex, and OpenCode', () => {
   assert.deepEqual(
     DEFAULT_PRESET_SCRIPTS.map((script) => script.id),
-    ['claude-code', 'codex', 'opencode', 'gemini-cli'],
+    ['claude-code', 'codex', 'opencode'],
   );
 
   assert.equal(DEFAULT_PRESET_SCRIPTS[2]?.id, 'opencode');
-  assert.equal(DEFAULT_PRESET_SCRIPTS[3]?.icon, 'gemini');
 });
 
-test('built-in context-aware workflow marker excludes Gemini', () => {
+test('built-in context-aware workflow marker covers all built-ins', () => {
   const contextAwareIds = DEFAULT_PRESET_SCRIPTS
     .filter((script) => isContextAwarePresetScript(script))
     .map((script) => script.id);
 
   assert.deepEqual(contextAwareIds, ['claude-code', 'codex', 'opencode']);
 });
-
-test('built-in workflow order is canonicalized around custom workflows', () => {
-  const customScript = {
-    ...DEFAULT_PRESET_SCRIPTS[0],
-    id: 'custom-workflow',
-    name: 'Custom workflow',
-  };
-  const unorderedScripts = [
-    findDefaultPresetScript('gemini-cli'),
-    customScript,
-    findDefaultPresetScript('opencode'),
-    findDefaultPresetScript('codex'),
-    findDefaultPresetScript('claude-code'),
-  ];
-
-  assert.deepEqual(
-    normalizePresetScriptsByCurrentDefaults(unorderedScripts).map((script) => script.id),
-    ['claude-code', 'custom-workflow', 'codex', 'opencode', 'gemini-cli'],
-  );
-});
-
-test('current built-in workflow order stays unchanged', () => {
-  const currentOrder = [
-    findDefaultPresetScript('claude-code'),
-    findDefaultPresetScript('codex'),
-    findDefaultPresetScript('opencode'),
-    findDefaultPresetScript('gemini-cli'),
-  ];
-
-  assert.deepEqual(
-    normalizePresetScriptsByCurrentDefaults(currentOrder).map((script) => script.id),
-    ['claude-code', 'codex', 'opencode', 'gemini-cli'],
-  );
-});
-
-test('built-in workflow commands are sourced from current defaults', () => {
-  const staleCodex = {
-    ...findDefaultPresetScript('codex'),
-    actions: [
-      {
-        id: 'action-codex',
-        type: 'terminal-command' as const,
-        value: 'codex "stale context prompt"',
-        enabled: true,
-        note: 'stale prompt command',
-      },
-    ],
-  };
-  const staleOpenCode = {
-    ...findDefaultPresetScript('opencode'),
-    icon: 'terminal',
-    actions: [
-      {
-        id: 'action-opencode',
-        type: 'terminal-command' as const,
-        value: 'opencode --stale-context',
-        enabled: true,
-        note: 'stale command',
-      },
-    ],
-    showInStatusBar: false,
-  };
-  const [normalizedCodex, normalizedOpenCode] = normalizePresetScriptsByCurrentDefaults([staleCodex, staleOpenCode]);
-  const codexLaunchAction = normalizedCodex?.actions.find((action) => action.id === 'action-codex');
-  const launchAction = normalizedOpenCode?.actions.find((action) => action.id === 'action-opencode');
-
-  assert.equal(codexLaunchAction?.value, CODEX_LAUNCH_COMMAND);
-  assert.equal(normalizedOpenCode?.icon, 'opencode');
-  assert.equal(normalizedOpenCode?.showInStatusBar, false);
-  assert.equal(launchAction?.value, OPENCODE_LAUNCH_COMMAND);
-});
-
-function findDefaultPresetScript(scriptId: string) {
-  const script = DEFAULT_PRESET_SCRIPTS.find((item) => item.id === scriptId);
-  assert.ok(script);
-  return script;
-}

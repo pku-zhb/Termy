@@ -160,7 +160,7 @@ export class TerminalSettingsRenderer extends BaseSettingsRenderer {
   private themePreviewEl: HTMLElement | null = null;
   private themePreviewContentEl: HTMLElement | null = null;
   private rendererStatusEl: HTMLElement | null = null;
-  private readonly builtInPresetIds = new Set(['claude-code', 'codex', 'opencode', 'gemini-cli']);
+  private readonly builtInPresetIds = new Set(['claude-code', 'codex', 'opencode']);
 
   /**
    * Render terminal settings
@@ -455,10 +455,21 @@ export class TerminalSettingsRenderer extends BaseSettingsRenderer {
       return;
     }
 
+    // Drag-and-drop state
+    let draggedRow: HTMLElement | null = null;
+    let draggedIndex: number | null = null;
+
     scripts.forEach((script, index) => {
       const row = listEl.createDiv({ cls: 'preset-script-row' });
+      row.setAttribute('draggable', 'true');
+      row.dataset.index = String(index);
+
       const isBuiltIn = this.isBuiltInPresetScript(script);
       const isContextAware = isContextAwarePresetScript(script);
+
+      // Drag handle
+      const dragHandle = row.createDiv({ cls: 'preset-script-drag-handle' });
+      setIcon(dragHandle, 'grip-vertical');
 
       const toggleWrap = row.createDiv({ cls: 'preset-script-toggle' });
       const showInStatusBar = script.showInStatusBar ?? true;
@@ -500,24 +511,6 @@ export class TerminalSettingsRenderer extends BaseSettingsRenderer {
 
       const actionsEl = row.createDiv({ cls: 'preset-script-actions' });
 
-      const moveUpBtn = actionsEl.createEl('button', { cls: 'clickable-icon' });
-      setIcon(moveUpBtn, 'arrow-up');
-      moveUpBtn.setAttribute('aria-label', t('settingsDetails.terminal.presetScriptsMoveUp'));
-      moveUpBtn.disabled = index === 0;
-      moveUpBtn.addEventListener('click', () => {
-        if (index === 0) return;
-        void this.movePresetScript(listEl, index, index - 1);
-      });
-
-      const moveDownBtn = actionsEl.createEl('button', { cls: 'clickable-icon' });
-      setIcon(moveDownBtn, 'arrow-down');
-      moveDownBtn.setAttribute('aria-label', t('settingsDetails.terminal.presetScriptsMoveDown'));
-      moveDownBtn.disabled = index === scripts.length - 1;
-      moveDownBtn.addEventListener('click', () => {
-        if (index >= scripts.length - 1) return;
-        void this.movePresetScript(listEl, index, index + 1);
-      });
-
       const editBtn = actionsEl.createEl('button', { cls: 'clickable-icon' });
       setIcon(editBtn, 'pencil');
       editBtn.setAttribute('aria-label', t('modals.presetScript.titleEdit'));
@@ -552,6 +545,75 @@ export class TerminalSettingsRenderer extends BaseSettingsRenderer {
           });
         });
       }
+
+      // Drag events
+      row.addEventListener('dragstart', (e) => {
+        draggedRow = row;
+        draggedIndex = index;
+        row.addClass('is-dragging');
+        if (e.dataTransfer) {
+          e.dataTransfer.effectAllowed = 'move';
+          e.dataTransfer.setData('text/plain', String(index));
+        }
+      });
+
+      row.addEventListener('dragend', () => {
+        if (draggedRow) {
+          draggedRow.removeClass('is-dragging');
+        }
+        draggedRow = null;
+        draggedIndex = null;
+        listEl.querySelectorAll('.preset-script-row').forEach(el => {
+          (el as HTMLElement).removeClass('drag-over-above');
+          (el as HTMLElement).removeClass('drag-over-below');
+        });
+      });
+
+      row.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        if (draggedIndex === null || draggedIndex === index) return;
+        if (e.dataTransfer) {
+          e.dataTransfer.dropEffect = 'move';
+        }
+        const rect = row.getBoundingClientRect();
+        const midY = rect.top + rect.height / 2;
+        listEl.querySelectorAll('.preset-script-row').forEach(el => {
+          (el as HTMLElement).removeClass('drag-over-above');
+          (el as HTMLElement).removeClass('drag-over-below');
+        });
+        if (e.clientY < midY) {
+          row.addClass('drag-over-above');
+        } else {
+          row.addClass('drag-over-below');
+        }
+      });
+
+      row.addEventListener('dragleave', () => {
+        row.removeClass('drag-over-above');
+        row.removeClass('drag-over-below');
+      });
+
+      row.addEventListener('drop', (e) => {
+        e.preventDefault();
+        row.removeClass('drag-over-above');
+        row.removeClass('drag-over-below');
+        if (draggedIndex === null || draggedIndex === index) return;
+
+        const rect = row.getBoundingClientRect();
+        const midY = rect.top + rect.height / 2;
+        let targetIndex = index;
+        if (e.clientY >= midY && draggedIndex < index) {
+          targetIndex = index;
+        } else if (e.clientY >= midY && draggedIndex > index) {
+          targetIndex = index + 1;
+        } else if (e.clientY < midY && draggedIndex < index) {
+          targetIndex = index - 1;
+        } else {
+          targetIndex = index;
+        }
+
+        void this.movePresetScript(listEl, draggedIndex, targetIndex);
+      });
 
     });
   }

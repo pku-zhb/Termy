@@ -231,31 +231,6 @@
   background-color: var(--interactive-accent-hover);
 }
 
-/* Responsive layout */
-@media (max-width: 600px) {
-  .rename-terminal-modal .modal {
-    max-width: 90vw;
-    padding: 16px 20px;
-  }
-  
-  .rename-terminal-modal .modal-title {
-    margin-bottom: 12px;
-  }
-  
-  .rename-terminal-modal .rename-input-container {
-    margin-bottom: 16px;
-  }
-  
-  .rename-terminal-modal .modal-button-container {
-    flex-direction: column-reverse;
-    margin-top: 16px;
-  }
-  
-  .rename-terminal-modal .modal-button-container button {
-    width: 100%;
-  }
-}
-
 /* Dark theme adjustments */
 .theme-dark .rename-terminal-modal .rename-input {
   background-color: var(--background-primary-alt);
@@ -281,7 +256,23 @@
 .preset-script-modal .modal {
   width: min(860px, calc(100vw - 48px));
   max-width: 860px;
+  max-height: min(90vh, 850px);
   padding: 20px 24px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.preset-script-modal .modal > .modal-close-button {
+  flex-shrink: 0;
+}
+
+.preset-script-modal .modal-title {
+  flex-shrink: 0;
+}
+
+.preset-script-modal .modal-button-container {
+  flex-shrink: 0;
 }
 
 /* ==================== Changelog Modal Styles ==================== */
@@ -401,26 +392,6 @@
   margin-block: 6px;
 }
 
-@media (max-width: 768px) {
-  .termy-changelog-modal .modal {
-    width: min(900px, calc(100vw - 20px));
-  }
-
-  .termy-changelog-header {
-    flex-direction: column;
-    align-items: stretch;
-    padding: 18px 18px 14px;
-  }
-
-  .termy-changelog-actions {
-    justify-content: space-between;
-  }
-
-  .termy-changelog-body {
-    padding: 18px 18px 22px;
-  }
-}
-
 .preset-script-modal-title-row {
   display: flex;
   align-items: center;
@@ -445,6 +416,10 @@
   display: flex;
   flex-direction: column;
   gap: 12px;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 .preset-script-field {
@@ -744,37 +719,6 @@
   font-size: 12px;
 }
 
-@media (max-width: 768px) {
-  .preset-script-modal .modal {
-    width: min(860px, calc(100vw - 24px));
-    padding: 16px 18px;
-  }
-
-  .preset-workflow-action-type {
-    grid-column: 2;
-  }
-
-  .preset-workflow-action-value-wrap {
-    grid-column: 2 / 6;
-    grid-row: 2;
-  }
-
-  .preset-workflow-action-note {
-    grid-column: 2 / 6;
-    grid-row: 3;
-  }
-
-  .preset-workflow-action-toggle {
-    grid-row: 1 / span 3;
-  }
-
-  .preset-workflow-action-delete,
-  .preset-workflow-action-move-up,
-  .preset-workflow-action-move-down {
-    grid-row: 1;
-  }
-}
-
 /* Icon selector */
 .preset-script-icon-selector {
   position: relative;
@@ -1026,6 +970,44 @@
   border: 1px solid var(--background-modifier-border);
   border-radius: 6px;
   background-color: var(--background-primary);
+  cursor: grab;
+  transition: box-shadow 0.15s ease, opacity 0.15s ease;
+}
+
+.preset-script-row:active {
+  cursor: grabbing;
+}
+
+.preset-script-row.is-dragging {
+  opacity: 0.4;
+}
+
+.preset-script-row.drag-over-above {
+  box-shadow: inset 0 2px 0 0 var(--interactive-accent);
+}
+
+.preset-script-row.drag-over-below {
+  box-shadow: inset 0 -2px 0 0 var(--interactive-accent);
+}
+
+.preset-script-drag-handle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  color: var(--text-faint);
+  flex-shrink: 0;
+  cursor: grab;
+}
+
+.preset-script-drag-handle:active {
+  cursor: grabbing;
+}
+
+.preset-script-drag-handle svg {
+  width: 14px;
+  height: 14px;
 }
 
 .preset-script-row.is-disabled {
@@ -1071,6 +1053,7 @@
 
 .preset-script-content {
   flex: 1;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -1087,6 +1070,11 @@
   font-size: 14px;
   font-weight: 600;
   color: var(--text-normal);
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .preset-script-row-built-in-badge {
@@ -1159,6 +1147,7 @@
   display: flex;
   flex-direction: column;
   min-width: 220px;
+  max-width: min(360px, calc(100vw - 16px));
   max-height: min(60vh, 420px);
   background: var(--background-primary);
   border: 1px solid var(--background-modifier-border);
@@ -1167,7 +1156,7 @@
   box-sizing: border-box;
   overflow-x: hidden;
   overflow-y: hidden;
-  z-index: 10000;
+  z-index: var(--layer-menu, 35);
 }
 
 .preset-scripts-menu-list {
@@ -1194,6 +1183,7 @@
   color: var(--text-normal);
   cursor: pointer;
   user-select: none;
+  min-width: 0;
 }
 
 .preset-scripts-menu-item:hover {
@@ -1228,7 +1218,94 @@
 
 .preset-scripts-menu-label {
   flex: 1;
+  min-width: 0;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.preset-scripts-menu-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.preset-scripts-menu-item:hover .preset-scripts-menu-actions {
+  opacity: 1;
+}
+
+.preset-scripts-menu-drag-handle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  color: var(--text-faint);
+  cursor: grab;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  flex-shrink: 0;
+  margin-right: -4px;
+}
+
+.preset-scripts-menu-drag-handle svg {
+  width: 14px;
+  height: 14px;
+}
+
+.preset-scripts-menu-item:hover .preset-scripts-menu-drag-handle {
+  opacity: 1;
+}
+
+.preset-scripts-menu-item.is-dragging {
+  opacity: 0.4;
+}
+
+.preset-scripts-menu-item.drag-over-above {
+  box-shadow: inset 0 2px 0 0 var(--interactive-accent);
+}
+
+.preset-scripts-menu-item.drag-over-below {
+  box-shadow: inset 0 -2px 0 0 var(--interactive-accent);
+}
+
+.preset-scripts-menu-action-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.preset-scripts-menu-action-btn:hover {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+
+.preset-scripts-menu-action-btn svg {
+  width: 14px;
+  height: 14px;
+}
+
+.preset-scripts-menu-action-delete:hover {
+  color: var(--text-error);
+}
+
+/* Preset workflow tooltip (status bar menu) — supports multi-line content */
+.tooltip.preset-script-tooltip {
+  white-space: pre-line;
+  text-align: left;
+  max-width: 360px;
+  word-break: break-word;
 }
 
 .preset-script-delete {
@@ -1715,21 +1792,6 @@
 }
 .xterm:not(.focus) .xterm-cursor {
   opacity: 0.5;
-}
-/* ==================== Responsive Layout ==================== */
-@media (max-width: 768px) {
-  .terminal-container {
-    padding: 0;
-  }
-  .terminal-error-message,
-  .terminal-exit-message {
-    margin: 4px;
-    padding: 8px;
-    font-size: 12px;
-  }
-  .xterm-text-layer {
-    font-size: 12px;
-  }
 }
 /* ==================== Performance Optimizations ==================== */
 .xterm-rows {
