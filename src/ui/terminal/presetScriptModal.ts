@@ -101,15 +101,6 @@ export class PresetScriptModal extends Modal {
     this.renderIconField(formEl);
     this.renderTerminalTitleField(formEl);
     this.renderActionsField(formEl);
-    if (this.draft.id === 'claude-code') {
-      this.renderClaudeCodeContextNotice(formEl);
-    }
-    if (this.draft.id === 'opencode') {
-      this.renderOpenCodeContextNotice(formEl);
-    }
-    if (this.draft.id === 'codex') {
-      this.renderAgentContextNotice(formEl);
-    }
     this.renderToggles(formEl);
     this.renderButtons(contentEl);
 
@@ -225,66 +216,6 @@ export class PresetScriptModal extends Modal {
       text: t('common.save')
     });
     confirmBtn.addEventListener('click', () => this.submit());
-  }
-
-  private renderAgentContextNotice(formEl: HTMLElement): void {
-    const section = this.renderIntegrationSection(
-      formEl,
-      this.draft.id === 'codex' ? 'openai' : 'opencode',
-      t('settingsDetails.advanced.agentCliIntegration')
-    );
-
-    new Setting(section)
-      .setName(t('settingsDetails.advanced.agentCliContext'))
-      .setDesc(t('settingsDetails.advanced.agentCliContextDesc'));
-  }
-
-  private renderClaudeCodeContextNotice(formEl: HTMLElement): void {
-    const section = this.renderIntegrationSection(
-      formEl,
-      'claude',
-      t('settingsDetails.advanced.claudeCodeIntegration')
-    );
-
-    new Setting(section)
-      .setName(t('settingsDetails.advanced.claudeCodeContext'))
-      .setDesc(t('settingsDetails.advanced.claudeCodeContextDesc'));
-  }
-
-  private renderOpenCodeContextNotice(formEl: HTMLElement): void {
-    const section = this.renderIntegrationSection(
-      formEl,
-      'opencode',
-      t('settingsDetails.advanced.openCodeIntegration')
-    );
-
-    new Setting(section)
-      .setName(t('settingsDetails.advanced.openCodeContext'))
-      .setDesc(t('settingsDetails.advanced.openCodeContextDesc'));
-  }
-
-  private renderIntegrationSection(
-    formEl: HTMLElement,
-    iconName: string,
-    title: string,
-  ): HTMLElement {
-    const section = formEl.createDiv({ cls: 'preset-script-integration-section' });
-
-    const kicker = section.createDiv({
-      cls: 'preset-script-integration-kicker',
-      text: t('settingsDetails.advanced.contextAwareness'),
-    });
-    kicker.setAttribute('aria-hidden', 'true');
-
-    const header = section.createDiv({ cls: 'preset-script-integration-header' });
-    const icon = header.createDiv({ cls: 'preset-script-integration-icon' });
-    renderPresetScriptIcon(icon, iconName);
-    header.createDiv({
-      cls: 'preset-script-integration-title',
-      text: title,
-    });
-
-    return section.createDiv({ cls: 'preset-script-integration-body' });
   }
 
   private isBuiltInPreset(): boolean {

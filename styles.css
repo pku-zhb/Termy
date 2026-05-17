@@ -428,65 +428,6 @@
   gap: 6px;
 }
 
-.preset-script-integration-section {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding: 12px 14px;
-  border: 1px solid color-mix(in srgb, var(--interactive-accent) 22%, var(--background-modifier-border));
-  border-radius: 10px;
-  background:
-    linear-gradient(
-      180deg,
-      color-mix(in srgb, var(--interactive-accent) 8%, transparent),
-      color-mix(in srgb, var(--background-secondary) 88%, transparent)
-    );
-  box-shadow: 0 8px 18px color-mix(in srgb, var(--background-modifier-border-hover) 16%, transparent);
-}
-
-.preset-script-integration-kicker {
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: var(--interactive-accent);
-}
-
-.preset-script-integration-header {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.preset-script-integration-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-  border-radius: 8px;
-  border: 1px solid color-mix(in srgb, var(--interactive-accent) 30%, var(--background-modifier-border));
-  background: var(--background-primary);
-  color: var(--text-muted);
-  flex-shrink: 0;
-}
-
-.preset-script-integration-title {
-  font-size: 15px;
-  font-weight: 700;
-  color: var(--text-normal);
-}
-
-.preset-script-integration-body {
-  display: flex;
-  flex-direction: column;
-  padding-top: 2px;
-}
-
-.preset-script-integration-body .setting-item:first-child {
-  padding-top: 0;
-}
-
 .preset-script-label {
   font-size: 12px;
   font-weight: 500;
@@ -1077,25 +1018,6 @@
   white-space: nowrap;
 }
 
-.preset-script-row-built-in-badge {
-  height: 20px;
-  padding: 0 7px;
-  font-size: 10px;
-}
-
-.preset-script-context-badge {
-  display: inline-flex;
-  align-items: center;
-  height: 20px;
-  padding: 0 7px;
-  border: 1px solid color-mix(in srgb, var(--interactive-accent) 38%, transparent);
-  border-radius: 999px;
-  color: var(--interactive-accent);
-  font-size: 10px;
-  font-weight: 600;
-  white-space: nowrap;
-}
-
 .preset-script-command {
   font-size: 12px;
   color: var(--text-muted);
@@ -1300,6 +1222,22 @@
   color: var(--text-error);
 }
 
+/* "Update" affordance shown on launcher rows when an upgrade is
+   available. Uses the accent color so it reads as a primary action
+   distinct from edit/delete. Hidden until the snapshot resolves. */
+.preset-scripts-menu-action-update {
+  color: var(--interactive-accent);
+}
+
+.preset-scripts-menu-action-update:hover {
+  background: color-mix(in srgb, var(--interactive-accent) 18%, transparent);
+  color: var(--interactive-accent);
+}
+
+.preset-scripts-menu-action-update.is-hidden {
+  display: none;
+}
+
 /* Preset workflow tooltip (status bar menu) — supports multi-line content */
 .tooltip.preset-script-tooltip {
   white-space: pre-line;
@@ -1310,6 +1248,21 @@
 
 .preset-script-delete {
   color: var(--text-error);
+}
+
+/* Settings page "Update now" affordance for AI launcher rows. Hidden
+   by default and revealed when readiness === 'update-available'. */
+.preset-script-launcher-update {
+  color: var(--interactive-accent);
+}
+
+.preset-script-launcher-update:hover {
+  background: color-mix(in srgb, var(--interactive-accent) 18%, transparent);
+  color: var(--interactive-accent);
+}
+
+.preset-script-launcher-update.is-hidden {
+  display: none;
 }
 
 .termy-always-on-top-tab-badge {
@@ -2035,4 +1988,257 @@
   height: 1px;
   background: var(--background-modifier-border);
   margin: 4px 8px;
+}
+
+
+/* AI launcher menu — section headers and readiness badges */
+.preset-scripts-menu-section-header {
+  padding: 8px 12px 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  user-select: none;
+  pointer-events: none;
+}
+
+.preset-scripts-menu-section-header + .preset-scripts-menu-section-header {
+  margin-top: 4px;
+}
+
+.preset-scripts-menu-section-title {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.preset-scripts-menu-section-desc {
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--text-faint);
+}
+
+.preset-scripts-menu-launcher {
+  position: relative;
+}
+
+.preset-scripts-menu-launcher .preset-scripts-menu-label {
+  font-weight: 500;
+}
+
+.preset-scripts-menu-status-badge {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 8px;
+  margin-left: 8px;
+  border-radius: 9px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  background: var(--background-modifier-border);
+  color: var(--text-muted);
+}
+
+.preset-scripts-menu-status-badge.is-ready {
+  background: color-mix(in srgb, var(--color-green) 18%, transparent);
+  color: var(--color-green);
+}
+
+.preset-scripts-menu-status-badge.is-not-installed {
+  background: color-mix(in srgb, var(--color-orange) 18%, transparent);
+  color: var(--color-orange);
+}
+
+.preset-scripts-menu-status-badge.is-update-available {
+  background: color-mix(in srgb, var(--interactive-accent) 18%, transparent);
+  color: var(--interactive-accent);
+}
+
+.preset-scripts-menu-status-badge.is-checking {
+  background: var(--background-modifier-border);
+  color: var(--text-faint);
+}
+
+/* Inline launcher version label rendered next to the readiness badge in
+   both the status bar menu and the settings page. Hidden until a probe
+   has resolved a local version. */
+.preset-scripts-menu-version {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 8px;
+  font-family: var(--font-monospace);
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.preset-scripts-menu-version.is-hidden {
+  display: none;
+}
+
+.preset-scripts-menu-version.is-update-available {
+  color: var(--interactive-accent);
+}
+
+/* Inline hint shown beneath the "Check for AI launcher updates" toggle
+   when offline mode is on. The toggle still works (so the user can
+   pre-arm it for when they go back online) but is dimmed to signal
+   that the update check itself is suppressed. */
+.setting-item.is-offline-suppressed .setting-item-control {
+  opacity: 0.55;
+}
+
+.setting-item.is-offline-suppressed .setting-item-name,
+.setting-item.is-offline-suppressed .setting-item-description {
+  color: var(--text-muted);
+}
+
+.ai-launcher-offline-hint {
+  margin: -4px 0 12px;
+  padding: 8px 12px;
+  border-left: 3px solid var(--color-orange);
+  border-radius: 0 6px 6px 0;
+  background: color-mix(in srgb, var(--color-orange) 10%, transparent);
+  color: var(--text-normal);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.ai-launcher-offline-hint.is-hidden {
+  display: none;
+}
+
+/* Launcher install modal — content layout */
+.termy-launcher-install-modal .termy-launcher-install-desc {
+  margin: 0 0 12px;
+  line-height: 1.5;
+  color: var(--text-normal);
+}
+
+.termy-launcher-install-modal .termy-launcher-install-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  margin-bottom: 12px;
+  border-radius: 6px;
+  background: var(--background-secondary);
+}
+
+.termy-launcher-install-modal .termy-launcher-install-detail-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.termy-launcher-install-modal .termy-launcher-install-detail-command {
+  font-family: var(--font-monospace);
+  font-size: 13px;
+  color: var(--text-normal);
+}
+
+/* Install command card — copy-paste friendly install one-liner. */
+.termy-launcher-install-modal .termy-launcher-install-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  margin-bottom: 12px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  background: var(--background-secondary);
+}
+
+.termy-launcher-install-modal .termy-launcher-install-card-title {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--text-normal);
+}
+
+.termy-launcher-install-modal .termy-launcher-install-card-desc {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+.termy-launcher-install-modal .termy-launcher-install-command-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.termy-launcher-install-modal .termy-launcher-install-command {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: var(--background-primary);
+  font-family: var(--font-monospace);
+  font-size: 12px;
+  color: var(--text-normal);
+  word-break: break-all;
+  white-space: pre-wrap;
+}
+
+.termy-launcher-install-modal .termy-launcher-install-command-copy {
+  flex: 0 0 auto;
+  padding: 6px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--background-modifier-border);
+  background: var(--background-primary);
+  color: var(--text-normal);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.termy-launcher-install-modal .termy-launcher-install-command-copy:hover {
+  background: var(--background-modifier-hover);
+}
+
+
+/* AI launcher settings — section headers and preview row */
+.preset-scripts-list-section-header {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 12px 4px 4px;
+  user-select: none;
+}
+
+.preset-scripts-list-section-header:first-child {
+  padding-top: 4px;
+}
+
+.preset-scripts-list-section-title {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.preset-scripts-list-section-desc {
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text-faint);
+}
+
+.preset-script-row.preset-script-row-preview {
+  opacity: 0.7;
+  cursor: default;
+}
+
+.preset-script-row.preset-script-row-preview .preset-script-drag-handle.is-disabled {
+  opacity: 0.3;
+  pointer-events: none;
+}
+
+.preset-script-row .preset-scripts-menu-status-badge {
+  margin-left: 8px;
 }

@@ -207,7 +207,7 @@ pnpm package:zip
 | `pnpm build` | TypeScript 检查、生产构建和 bundle smoke check。 |
 | `pnpm build:rust` | 构建原生 PTY 后端二进制。 |
 | `pnpm package:zip` | 生成发布压缩包。 |
-| `pnpm install:dev <vault-path>` | 构建全部内容并安装到本地开发 vault。 |
+| `pnpm install:dev <vault-path>` | 构建全部内容并安装到本地开发 vault。当仅修改 TypeScript 代码时，可追加 `--no-rust` 跳过原生 PTY 后端的重新编译。 |
 | `pnpm test:terminal` | 编译并运行终端层 Node 测试。 |
 
 ## 架构概览

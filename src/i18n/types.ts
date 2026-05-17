@@ -173,6 +173,11 @@ export interface TranslationKeys {
       emptyCommand: string;
       terminalUnavailable: string;
       runFailed: string;
+      launcherUpdateAvailable: string;
+      launcherInstalled: string;
+      launcherUpdated: string;
+      launcherOnLatest: string;
+      launcherCopied: string;
     };
   };
 
@@ -299,6 +304,26 @@ export interface TranslationKeys {
       presetScriptAutoOpenTerminalDesc: string;
       presetScriptRunInNewTerminal: string;
       presetScriptRunInNewTerminalDesc: string;
+      // AI launcher catalog (status bar menu + settings list)
+      aiLauncherCategoryCodingAgent: string;
+      aiLauncherCategoryCodingAgentDesc: string;
+      aiLauncherCategoryWorkflow: string;
+      aiLauncherCategoryWorkflowDesc: string;
+      aiLauncherStatusReady: string;
+      aiLauncherStatusNotInstalled: string;
+      aiLauncherStatusUpdateAvailable: string;
+      aiLauncherStatusChecking: string;
+      aiLauncherUpdateAriaLabel: string;
+      aiLauncherTooltipInstalled: string;
+      aiLauncherTooltipLatest: string;
+      aiLauncherTooltipResolvedFrom: string;
+      aiLauncherTitleInstall: string;
+      aiLauncherTitleUpdate: string;
+      hideUnavailableAiLaunchers: string;
+      hideUnavailableAiLaunchersDesc: string;
+      checkAiLauncherUpdates: string;
+      checkAiLauncherUpdatesDesc: string;
+      aiLauncherOfflineHint: string;
     };
     advanced: {
       performanceAndDebug: string;
@@ -307,15 +332,6 @@ export interface TranslationKeys {
       serverConnection: string;
       serverConnectionDesc: string;
       contextAwareness: string;
-      claudeCodeIntegration: string;
-      openCodeIntegration: string;
-      agentCliIntegration: string;
-      claudeCodeContext: string;
-      claudeCodeContextDesc: string;
-      openCodeContext: string;
-      openCodeContextDesc: string;
-      agentCliContext: string;
-      agentCliContextDesc: string;
       offlineMode: string;
       offlineModeDesc: string;
       binaryDownloadSource: string;
@@ -350,6 +366,27 @@ export interface TranslationKeys {
     presetScript: {
       titleCreate: string;
       titleEdit: string;
+    };
+    launcherInstall: {
+      titleNotInstalled: string;
+      titleUpdate: string;
+      descriptionNotInstalled: string;
+      descriptionUpdate: string;
+      detectedCommand: string;
+      versionLabel: string;
+      cardTitleInstall: string;
+      cardTitleUpgrade: string;
+      cardTitleUpgradeOneClick: string;
+      cardDescInstall: string;
+      cardDescUpgrade: string;
+      cardDescUpgradeOneClick: string;
+      buttonCopy: string;
+      buttonClose: string;
+      buttonOpenDocs: string;
+      buttonInstallNow: string;
+      buttonUpdateNow: string;
+      buttonRunAnyway: string;
+      buttonRunCurrentVersion: string;
     };
   };
 

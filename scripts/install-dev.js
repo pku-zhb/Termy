@@ -7,7 +7,10 @@
  *
  * Options:
  *   --kill      Close and restart Obsidian
- *   --no-build  Skip building (already done by pnpm install:dev)
+ *   --no-build  Skip the TypeScript/esbuild plugin build (`pnpm build`)
+ *   --no-rust   Skip the native PTY server build (`pnpm build:rust`).
+ *               Useful when only the TypeScript layer changed and the
+ *               existing `binaries/<termy-server>` is still up to date.
  *   --reset     Reset saved configuration
  */
 
@@ -30,6 +33,7 @@ const CONFIG_FILE = path.join(ROOT_DIR, '.dev-install-config.json');
 const args = process.argv.slice(2);
 const KILL_OBSIDIAN = args.includes('--kill');
 const SKIP_BUILD = args.includes('--no-build');
+const SKIP_RUST = args.includes('--no-rust');
 const RESET_CONFIG = args.includes('--reset');
 
 // Get vault path from first non-flag argument
@@ -318,7 +322,7 @@ async function main() {
 
   // 2. Build
   if (!SKIP_BUILD) {
-    log('Building...', 'cyan');
+    log('Building plugin (TypeScript)...', 'cyan');
     try {
       execSync('pnpm build', { cwd: ROOT_DIR, stdio: 'inherit' });
     } catch (e) {
@@ -326,7 +330,23 @@ async function main() {
       closeReadline();
       process.exit(1);
     }
-    log('Build complete\n', 'green');
+    log('Plugin build complete\n', 'green');
+  } else {
+    log('Skipping plugin build (--no-build)\n', 'yellow');
+  }
+
+  if (!SKIP_RUST) {
+    log('Building Rust PTY server...', 'cyan');
+    try {
+      execSync('pnpm build:rust', { cwd: ROOT_DIR, stdio: 'inherit' });
+    } catch (e) {
+      log('\nRust build failed', 'red');
+      closeReadline();
+      process.exit(1);
+    }
+    log('Rust build complete\n', 'green');
+  } else {
+    log('Skipping Rust build (--no-rust); reusing existing binaries/\n', 'yellow');
   }
 
   // 3. Check files
