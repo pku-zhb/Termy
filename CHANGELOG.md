@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Added an Agent output panel that renders structured agent activity as Markdown next to the terminal. The first wired-up source is the existing IDE bridge: when Claude Code (or any other MCP-compatible CLI) connects, the panel shows a "connected" session card; when the agent calls the new `openFile` tool, Termy navigates to the requested vault file and posts a tool card. xterm.js terminals are unchanged. Demo flow available through the **Agent: run demo stream** command.
 - Added a built-in Hermes Agent launcher to the workflow gallery, status bar menu, and command palette. The launcher detects the `hermes` CLI on PATH, surfaces install / update guidance for macOS, Linux, and Windows, and queries `https://api.github.com` for the latest `NousResearch/hermes-agent` release when **Check for AI launcher updates** is opted in.
 - Added a built-in DeepSeek TUI launcher. The launcher detects the `deepseek` dispatcher on PATH, surfaces install / update guidance via `npm install -g deepseek-tui`, and queries `https://registry.npmjs.org` for the latest `deepseek-tui` release when update checks are opted in.
 
