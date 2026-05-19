@@ -13,8 +13,13 @@ import { TerminalSettingTab } from './settings/settingsTab';
 import type { TerminalService } from './services/terminal/terminalService';
 import type { ServerManager } from './services/server/serverManager';
 import type { IdeBridge } from './services/ideBridge/ideBridge';
+import type { IdeBridgeAgentSource } from './services/agentStream/ideBridgeAgentSource';
+import type { AcpAgentSource } from './services/agentStream/acp/acpAgentSource';
 import type { AgentContextBridge } from './services/context/agentContextBridge';
 import { TERMINAL_VIEW_TYPE, TerminalView } from './ui/terminal/terminalView';
+import { AGENT_OUTPUT_VIEW_TYPE, AgentOutputView } from './ui/agent/agentOutputView';
+import { AgentEventBus } from './services/agentStream/agentEventBus';
+import type { MockAgentSource as MockAgentSourceType } from './services/agentStream/mockAgentSource';
 import { ChangelogModal } from './ui/changelog/changelogModal';
 import { i18n, t } from './i18n';
 import { debugLog, errorLog } from './utils/logger';
@@ -110,7 +115,27 @@ export default class TerminalPlugin extends Plugin {
   private _serverManager: ServerManager | null = null;
   private _terminalService: TerminalService | null = null;
   private _ideBridge: IdeBridge | null = null;
+  private _ideBridgeAgentSource: IdeBridgeAgentSource | null = null;
   private _agentContextBridge: AgentContextBridge | null = null;
+  /**
+   * Active ACP agent source, if any. The agent panel's input box
+   * routes prompts here; the bus already broadcasts the source's
+   * events to the panel's renderer.
+   */
+  private _activeAcpAgentSource: AcpAgentSource | null = null;
+  /**
+   * Bus that fans out structured agent events ({@link AgentEventBus})
+   * to the {@link AgentOutputView}. Created lazily on first access so
+   * users who never open the panel pay no startup cost.
+   */
+  private _agentEventBus: AgentEventBus | null = null;
+  /**
+   * The mock source backing the "Agent: run demo stream" command.
+   * Held so the matching stop command can detach it without juggling
+   * any handles. Lazily imported because the renderer-side script
+   * never needs to load when the user doesn't open the panel.
+   */
+  private _mockAgentSource: MockAgentSourceType | null = null;
   private _changelogContentCache: string | null = null;
   private _changelogSectionCache: Map<string, ChangelogDetails> = new Map();
   
@@ -239,6 +264,18 @@ export default class TerminalPlugin extends Plugin {
       }
     );
 
+    // Register the Agent output view. Cheap to register — the view
+    // does not subscribe to the event bus or load Markdown until it
+    // is opened. Users who never open it pay nothing.
+    this.registerView(
+      AGENT_OUTPUT_VIEW_TYPE,
+      (leaf: WorkspaceLeaf) => new AgentOutputView(leaf, {
+        bus: this.getAgentEventBus(),
+        submitPrompt: (text) => this.submitPromptToActiveAcpAgent(text),
+        cancelTurn: () => this.cancelActiveAcpAgentTurn(),
+      }),
+    );
+
     // Register all commands
     this.registerCommands();
 
@@ -339,7 +376,152 @@ export default class TerminalPlugin extends Plugin {
       }
     }
 
+    if (this._agentEventBus) {
+      try {
+        debugLog('[TerminalPlugin] Stopping agent event sources...');
+        await this._agentEventBus.stopAll();
+        debugLog('[TerminalPlugin] Agent event sources stopped');
+      } catch (error) {
+        errorLog('[TerminalPlugin] Failed to stop agent event sources:', error);
+      }
+      this._agentEventBus = null;
+      this._mockAgentSource = null;
+      this._activeAcpAgentSource = null;
+    }
+
     debugLog(t('plugin.unloadedMessage'));
+  }
+
+  /**
+   * Lazily build the agent event bus. Splitting it out keeps the bus
+   * out of the cold start path; only callers that actually need it
+   * (the view registration callback, the demo command) trigger
+   * construction.
+   */
+  getAgentEventBus(): AgentEventBus {
+    if (!this._agentEventBus) {
+      this._agentEventBus = new AgentEventBus();
+    }
+    return this._agentEventBus;
+  }
+
+  /**
+   * Open the agent output view, creating a leaf in the right sidebar
+   * if one is not already open. Mirrors {@link activateTerminalView}
+   * but does not depend on the terminal lifecycle.
+   */
+  async activateAgentOutputView(): Promise<void> {
+    const { workspace } = this.app;
+    const existing = workspace.getLeavesOfType(AGENT_OUTPUT_VIEW_TYPE);
+    if (existing.length > 0) {
+      workspace.setActiveLeaf(existing[0], { focus: true });
+      return;
+    }
+
+    const leaf = workspace.getRightLeaf(false) ?? workspace.getLeaf('tab');
+    await leaf.setViewState({
+      type: AGENT_OUTPUT_VIEW_TYPE,
+      active: true,
+    });
+    workspace.setActiveLeaf(leaf, { focus: true });
+  }
+
+  async startMockAgentStream(): Promise<void> {
+    if (this._mockAgentSource) {
+      return;
+    }
+    const { MockAgentSource } = await import('./services/agentStream/mockAgentSource');
+    this._mockAgentSource = new MockAgentSource();
+    await this.getAgentEventBus().addSource(this._mockAgentSource);
+  }
+
+  async stopMockAgentStream(): Promise<void> {
+    if (!this._mockAgentSource || !this._agentEventBus) {
+      return;
+    }
+    await this._agentEventBus.removeSource(this._mockAgentSource.name);
+    this._mockAgentSource = null;
+  }
+
+  /**
+   * Spawn an ACP agent (currently hardcoded to OpenCode's
+   * `opencode acp` subcommand) and register it with the agent
+   * panel's event bus. The session is bound to the vault root so
+   * the agent's `cwd` matches what Termy already uses for AI launcher
+   * terminals.
+   */
+  async startAcpAgent(): Promise<void> {
+    if (this._activeAcpAgentSource) {
+      return;
+    }
+    const { AcpAgentSource } = await import('./services/agentStream/acp/acpAgentSource');
+    const { AcpChildProcessTransport } = await import('./services/agentStream/acp/childProcessTransport');
+
+    const cwd = this.getVaultRootForAgent();
+    const command = 'opencode';
+    // OpenCode exposes ACP as a dedicated subcommand: `opencode acp`.
+    // The earlier draft used `--acp`, which OpenCode silently treats
+    // as a project path and falls through to its `tui` default,
+    // leaving us with the help screen and an exit-code-1 close.
+    const args = ['acp'];
+
+    const source = new AcpAgentSource({
+      name: 'acp:opencode',
+      agentLabel: 'OpenCode',
+      cwd,
+      transportFactory: () => new AcpChildProcessTransport({ command, args, cwd }),
+      clientInfo: {
+        name: 'termy-obsidian',
+        title: 'Termy (Obsidian)',
+        version: this.manifest.version,
+      },
+    });
+
+    this._activeAcpAgentSource = source;
+    try {
+      await this.getAgentEventBus().addSource(source);
+    } catch (error) {
+      // Surface a friendly error to the user; the bus has already
+      // attempted to stop the source on failure, so we just need to
+      // forget the reference here so the next "connect" command
+      // tries again from scratch.
+      this._activeAcpAgentSource = null;
+      throw error instanceof Error ? error : new Error(String(error));
+    }
+  }
+
+  async stopAcpAgent(): Promise<void> {
+    if (!this._activeAcpAgentSource || !this._agentEventBus) {
+      return;
+    }
+    const source = this._activeAcpAgentSource;
+    this._activeAcpAgentSource = null;
+    await this._agentEventBus.removeSource(source.name);
+  }
+
+  private async submitPromptToActiveAcpAgent(text: string): Promise<void> {
+    const source = this._activeAcpAgentSource;
+    if (!source) {
+      // No connected agent — surface a friendly hint rather than a stack trace.
+      new Notice(t('agent.noticeAcpFailed', { message: 'No agent connected' }));
+      return;
+    }
+    await source.submitPrompt(text);
+  }
+
+  private cancelActiveAcpAgentTurn(): void {
+    this._activeAcpAgentSource?.cancelTurn();
+  }
+
+  private getVaultRootForAgent(): string {
+    const adapter = this.app.vault.adapter;
+    if (adapter instanceof FileSystemAdapter) {
+      return adapter.getBasePath();
+    }
+    // Should be unreachable in the desktop-only plugin, but a sane
+    // fallback keeps the agent from crashing on a misconfigured
+    // adapter.
+    return process.cwd();
   }
 
   private async initializeIdeBridge(): Promise<void> {
@@ -349,6 +531,24 @@ export default class TerminalPlugin extends Plugin {
     }
 
     await this._ideBridge.start();
+    await this.attachIdeBridgeAgentSource();
+  }
+
+  /**
+   * Wire the bridge's sanitized event feed into the agent panel's
+   * event bus. Idempotent — calling twice is a no-op because the bus
+   * tracks sources by name.
+   *
+   * Lazy-loaded for the same reason the rest of the agent stream is:
+   * users who never open the panel never pay the import cost.
+   */
+  private async attachIdeBridgeAgentSource(): Promise<void> {
+    if (!this._ideBridge || this._ideBridgeAgentSource) {
+      return;
+    }
+    const { IdeBridgeAgentSource } = await import('./services/agentStream/ideBridgeAgentSource');
+    this._ideBridgeAgentSource = new IdeBridgeAgentSource(this._ideBridge);
+    await this.getAgentEventBus().addSource(this._ideBridgeAgentSource);
   }
 
   private async initializeAgentContextBridge(): Promise<void> {
@@ -1007,6 +1207,78 @@ export default class TerminalPlugin extends Plugin {
       name: t('commands.showChangelog'),
       callback: () => {
         this.showChangelog();
+      },
+    });
+
+    this.addCommand({
+      id: 'agent-open-output',
+      name: t('agent.openCommand'),
+      callback: () => {
+        void this.activateAgentOutputView();
+      },
+    });
+
+    this.addCommand({
+      id: 'agent-run-demo-stream',
+      name: t('agent.runDemoCommand'),
+      callback: () => {
+        void (async () => {
+          try {
+            await this.activateAgentOutputView();
+            await this.startMockAgentStream();
+            new Notice(t('agent.noticeDemoStarted'));
+          } catch (error) {
+            errorLog('[TerminalPlugin] Failed to start demo agent stream:', error);
+          }
+        })();
+      },
+    });
+
+    this.addCommand({
+      id: 'agent-stop-demo-stream',
+      name: t('agent.stopDemoCommand'),
+      callback: () => {
+        void (async () => {
+          try {
+            await this.stopMockAgentStream();
+            new Notice(t('agent.noticeDemoStopped'));
+          } catch (error) {
+            errorLog('[TerminalPlugin] Failed to stop demo agent stream:', error);
+          }
+        })();
+      },
+    });
+
+    this.addCommand({
+      id: 'agent-connect-acp',
+      name: t('agent.connectAcpCommand'),
+      callback: () => {
+        void (async () => {
+          try {
+            await this.activateAgentOutputView();
+            await this.startAcpAgent();
+            new Notice(t('agent.noticeAcpConnected'));
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            errorLog('[TerminalPlugin] Failed to start ACP agent:', error);
+            new Notice(t('agent.noticeAcpFailed', { message }));
+          }
+        })();
+      },
+    });
+
+    this.addCommand({
+      id: 'agent-disconnect-acp',
+      name: t('agent.disconnectAcpCommand'),
+      callback: () => {
+        void (async () => {
+          try {
+            await this.stopAcpAgent();
+            new Notice(t('agent.noticeAcpDisconnected'));
+          } catch (error) {
+            errorLog('[TerminalPlugin] Failed to stop ACP agent:', error);
+          }
+        })();
       },
     });
 

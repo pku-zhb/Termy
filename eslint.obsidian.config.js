@@ -84,7 +84,10 @@ export default [
           // contains the IDE name "Cursor", which collides with the
           // unrelated terminal-caret descriptions in this locale.
           // Allow `cursor` as a regular lowercase word.
-          ignoreRegex: ['\\bcursor\\b'],
+          // ACP is the Agent Client Protocol and is conventionally
+          // written in caps; allow the bare token in agent-related
+          // command labels and notices.
+          ignoreRegex: ['\\bcursor\\b', '\\bACP\\b'],
         },
       ],
     },
