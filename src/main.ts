@@ -13,7 +13,6 @@ import { TerminalSettingTab } from './settings/settingsTab';
 import type { TerminalService } from './services/terminal/terminalService';
 import type { ServerManager } from './services/server/serverManager';
 import { TERMINAL_VIEW_TYPE, TerminalView } from './ui/terminal/terminalView';
-import { ChangelogModal } from './ui/changelog/changelogModal';
 import { i18n, t } from './i18n';
 import { debugLog, errorLog } from './utils/logger';
 import { createTermyLogoSvg, createTermyLogoSvgMarkup, TERMY_RIBBON_ICON_ID } from './ui/icons';
@@ -46,25 +45,10 @@ import {
   type AiLauncherStatusSnapshot,
 } from './services/terminal/aiLauncherStatus';
 import { LauncherInstallModal } from './ui/terminal/launcherInstallModal';
-import { resolveChangelogSection } from './utils/changelog';
-import embeddedChangelogContent from '../CHANGELOG.md';
 
 // Import terminal styles
 
-const REPOSITORY_URL = 'https://github.com/ZyphrZero/Termy';
-const CHANGELOG_URL = `${REPOSITORY_URL}/blob/master/CHANGELOG.md`;
-const EMBEDDED_CHANGELOG_SOURCE_PATH = 'CHANGELOG.md';
 const ALWAYS_ON_TOP_TAB_BADGE_CLASS = 'termy-always-on-top-tab-badge';
-
-type ChangelogDetails = {
-  requestedVersion: string;
-  version: string;
-  markdown: string;
-  releaseUrl: string | null;
-  fullChangelogUrl: string;
-  sourcePath: string;
-  exactMatch: boolean;
-};
 
 type ElectronBrowserWindowLike = {
   setAlwaysOnTop: (flag: boolean, level?: string) => void;
@@ -92,8 +76,6 @@ export default class TerminalPlugin extends Plugin {
   // Lazily initialized services
   private _serverManager: ServerManager | null = null;
   private _terminalService: TerminalService | null = null;
-  private _changelogContentCache: string | null = null;
-  private _changelogSectionCache: Map<string, ChangelogDetails> = new Map();
   
   // Status bar elements
   private _statusBarItem: HTMLElement | null = null;
@@ -221,14 +203,6 @@ export default class TerminalPlugin extends Plugin {
       if (this.settings.visibility.showInNewTab) {
         this.registerNewTabTerminalAction();
       }
-      void this.maybeShowChangelogOnFirstOpen().catch((error) => {
-        errorLog('[TerminalPlugin] Failed to show changelog on first open:', error);
-      });
-      // Warm up the AI launcher availability snapshot so the first menu
-      // open already shows accurate Ready / Not installed badges.
-      void this.refreshAiLauncherAvailability().catch((error) => {
-        errorLog('[TerminalPlugin] Failed to refresh AI launcher availability:', error);
-      });
     });
 
     // Add the settings tab
@@ -285,66 +259,6 @@ export default class TerminalPlugin extends Plugin {
     debugLog(t('plugin.unloadedMessage'));
   }
 
-  showChangelog(version = this.manifest.version): void {
-    new ChangelogModal(this.app, this, version).open();
-  }
-
-  getChangelogDetails(version = this.manifest.version): ChangelogDetails {
-    const normalizedVersion = version.trim();
-    if (!normalizedVersion) {
-      throw new Error('Plugin version is unavailable');
-    }
-
-    const cached = this._changelogSectionCache.get(normalizedVersion);
-    if (cached) {
-      return cached;
-    }
-
-    const changelogContent = this.readChangelogContent();
-    const resolvedSection = resolveChangelogSection(changelogContent, normalizedVersion);
-    const details = {
-      requestedVersion: normalizedVersion,
-      version: resolvedSection.resolvedVersion,
-      markdown: resolvedSection.markdown,
-      releaseUrl: resolvedSection.resolvedVersion !== 'Unreleased'
-        ? `${REPOSITORY_URL}/releases/tag/${resolvedSection.resolvedVersion}`
-        : null,
-      fullChangelogUrl: CHANGELOG_URL,
-      sourcePath: EMBEDDED_CHANGELOG_SOURCE_PATH,
-      exactMatch: resolvedSection.exactMatch,
-    };
-
-    if (!resolvedSection.exactMatch) {
-      debugLog(
-        `[TerminalPlugin] Falling back from changelog version ${normalizedVersion} to ${resolvedSection.resolvedVersion}`
-      );
-    }
-
-    this._changelogSectionCache.set(normalizedVersion, details);
-    return details;
-  }
-
-  private async maybeShowChangelogOnFirstOpen(): Promise<void> {
-    const currentVersion = this.manifest.version.trim();
-    if (!currentVersion || this.settings.lastSeenChangelogVersion === currentVersion) {
-      return;
-    }
-
-    this.getChangelogDetails(currentVersion);
-    this.showChangelog(currentVersion);
-    this.settings.lastSeenChangelogVersion = currentVersion;
-    await this.saveData(this.settings);
-  }
-
-  private readChangelogContent(): string {
-    if (this._changelogContentCache) {
-      return this._changelogContentCache;
-    }
-
-    // Always read the bundled changelog so every install path behaves the same.
-    this._changelogContentCache = embeddedChangelogContent;
-    return this._changelogContentCache;
-  }
 
   /**
    * Load settings
@@ -928,14 +842,6 @@ export default class TerminalPlugin extends Plugin {
         }
         return true;
       }
-    });
-
-    this.addCommand({
-      id: 'show-changelog',
-      name: t('commands.showChangelog'),
-      callback: () => {
-        this.showChangelog();
-      },
     });
 
 

@@ -68,16 +68,6 @@ export class TerminalSettingTab extends PluginSettingTab {
 
     titleGroup.createDiv({ cls: 'settings-title', text: t('settings.header.title') });
 
-    const changelogBtn = titleGroup.createEl('button', {
-      cls: 'settings-header-button settings-title-changelog-button',
-    });
-    changelogBtn.setAttribute('type', 'button');
-    setIcon(changelogBtn, 'scroll-text');
-    changelogBtn.createSpan({ text: t('settings.header.changelog') });
-    changelogBtn.addEventListener('click', () => {
-      this.plugin.showChangelog();
-    });
-
     // Right side: feedback link + reload button
     const actionsGroup = titleRow.createDiv({ cls: 'settings-actions-group' });
     
