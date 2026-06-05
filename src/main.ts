@@ -398,9 +398,12 @@ export default class TerminalPlugin extends Plugin {
   }
 
   private normalizePresetScripts(value: unknown): PresetScript[] {
-    const scripts = Array.isArray(value)
+    // 魔改 fork：删除 AI 启动器后，过滤掉历史遗留的内置启动器脚本
+    const REMOVED_AI_LAUNCHER_IDS = new Set(['claude-code', 'codex', 'opencode']);
+    const scripts = (Array.isArray(value)
       ? value.map((script: PresetScript) => this.normalizePresetScript(script))
-      : [];
+      : []
+    ).filter((script) => !REMOVED_AI_LAUNCHER_IDS.has(script.id));
     const existingIds = new Set(scripts.map((script) => script.id));
 
     // Seed missing built-in workflows. This happens on first install or if a

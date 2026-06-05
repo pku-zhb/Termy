@@ -99,73 +99,10 @@ export interface AiLauncherCatalogEntry {
  * product category is introduced, add a new arm to {@link AiLauncherCategory}
  * and update every render site (TypeScript will fail the build until you do).
  */
-export const AI_LAUNCHER_CATALOG: readonly AiLauncherCatalogEntry[] = [
-  {
-    presetId: 'claude-code',
-    category: 'coding-agent',
-    detectCommand: 'claude',
-    installDocsUrl: 'https://docs.anthropic.com/en/docs/claude-code/quickstart',
-    installCommands: {
-      // Anthropic ships a native installer; no Node.js required.
-      // See https://code.claude.com/docs/en/quickstart#step-1-install-claude-code
-      darwin: 'curl -fsSL https://claude.ai/install.sh | bash',
-      linux: 'curl -fsSL https://claude.ai/install.sh | bash',
-      // Default to PowerShell on Windows; the docs URL covers the CMD variant.
-      win32: 'irm https://claude.ai/install.ps1 | iex',
-    },
-    versionRegistry: { kind: 'npm', package: '@anthropic-ai/claude-code' },
-    // `claude update` (alias `upgrade`) is the upstream-recommended way
-    // to bump the native installer, regardless of how the user installed
-    // the binary originally. Same command on every platform.
-    upgradeCommands: {
-      darwin: 'claude update',
-      linux: 'claude update',
-      win32: 'claude update',
-    },
-  },
-  {
-    presetId: 'codex',
-    category: 'coding-agent',
-    detectCommand: 'codex',
-    installDocsUrl: 'https://github.com/openai/codex',
-    installCommands: {
-      // OpenAI's two recommended paths from the README; brew avoids
-      // pulling in Node when the user has Homebrew.
-      darwin: 'brew install --cask codex',
-      linux: 'npm install -g @openai/codex',
-      win32: 'npm install -g @openai/codex',
-    },
-    versionRegistry: { kind: 'npm', package: '@openai/codex' },
-    // OpenAI does not ship a `codex update` subcommand yet, so we reuse
-    // the install paths with `@latest` for npm and brew's upgrade verb.
-    upgradeCommands: {
-      darwin: 'brew upgrade --cask codex',
-      linux: 'npm install -g @openai/codex@latest',
-      win32: 'npm install -g @openai/codex@latest',
-    },
-  },
-  {
-    presetId: 'opencode',
-    category: 'coding-agent',
-    detectCommand: 'opencode',
-    installDocsUrl: 'https://opencode.ai/docs',
-    installCommands: {
-      // OpenCode publishes a single-binary install script for Unix shells.
-      darwin: 'curl -fsSL https://opencode.ai/install | bash',
-      linux: 'curl -fsSL https://opencode.ai/install | bash',
-      // npm works universally on Windows without requiring scoop.
-      win32: 'npm install -g opencode-ai',
-    },
-    versionRegistry: { kind: 'github-release', repo: 'anomalyco/opencode' },
-    // OpenCode's install script performs in-place upgrades on Unix.
-    // On Windows, npm handles the upgrade via @latest.
-    upgradeCommands: {
-      darwin: 'curl -fsSL https://opencode.ai/install | bash',
-      linux: 'curl -fsSL https://opencode.ai/install | bash',
-      win32: 'npm install -g opencode-ai@latest',
-    },
-  },
-];
+// 魔改 fork：清空 AI 启动器目录 —— claude/codex/opencode 的快捷启动 + 安装/版本
+// 状态检测全部退化为普通 preset 脚本（不再有分组、状态徽章、安装/更新弹窗）。
+// main.ts 里相关方法随之成为 dead code（不再被触发），但不影响 preset scripts 系统。
+export const AI_LAUNCHER_CATALOG: readonly AiLauncherCatalogEntry[] = [];
 
 const CATALOG_INDEX = new Map<string, AiLauncherCatalogEntry>(
   AI_LAUNCHER_CATALOG.map((entry) => [entry.presetId, entry])

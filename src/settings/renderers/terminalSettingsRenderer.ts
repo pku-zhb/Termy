@@ -528,62 +528,6 @@ export class TerminalSettingsRenderer extends BaseSettingsRenderer {
 
     const listEl = scriptCard.createDiv({ cls: 'preset-scripts-list' });
     this.renderPresetScriptsList(listEl);
-
-    // "Hide unavailable AI launchers" toggle. Lives below the workflow list
-    // so power users can declutter their menu after deciding which CLIs they
-    // want to keep around. Default is `false` because a fresh install needs
-    // the install guidance to be visible.
-    new Setting(scriptCard)
-      .setName(t('settingsDetails.terminal.hideUnavailableAiLaunchers'))
-      .setDesc(t('settingsDetails.terminal.hideUnavailableAiLaunchersDesc'))
-      .addToggle((toggle) => {
-        toggle
-          .setValue(this.context.plugin.settings.hideUnavailableAiLaunchers === true)
-          .onChange((value) => {
-            this.context.plugin.settings.hideUnavailableAiLaunchers = value;
-            void this.saveSettings();
-          });
-      });
-
-    // "Check for AI launcher updates" toggle. Off by default because it
-    // introduces outbound traffic to npm and GitHub — the README and
-    // AGENTS.md document the additional endpoints when this is enabled.
-    //
-    // Offline mode wins regardless of this toggle (the README's "no extra
-    // outbound traffic" promise is contractual). Surface that interaction
-    // inline so the user does not silently wonder why the badges stay
-    // green when their CLI is out of date.
-    const updateCheckSetting = new Setting(scriptCard)
-      .setName(t('settingsDetails.terminal.checkAiLauncherUpdates'))
-      .setDesc(t('settingsDetails.terminal.checkAiLauncherUpdatesDesc'))
-      .addToggle((toggle) => {
-        toggle
-          .setValue(this.context.plugin.settings.checkAiLauncherUpdates === true)
-          .onChange((value) => {
-            this.context.plugin.settings.checkAiLauncherUpdates = value;
-            void this.saveSettings().then(() => {
-              if (value) {
-                void this.context.plugin.refreshAiLauncherStatusFromSettings();
-              }
-            });
-          });
-      });
-
-    // Inline hint that appears underneath the toggle row when offline
-    // mode is active. We render it after the Setting so it sits in the
-    // same visual block but is easy to show/hide based on offline state.
-    const offlineHintEl = scriptCard.createDiv({
-      cls: 'setting-item-description ai-launcher-offline-hint',
-    });
-    offlineHintEl.setText(t('settingsDetails.terminal.aiLauncherOfflineHint'));
-
-    const refreshOfflineHintVisibility = (): void => {
-      const offline = this.context.plugin.settings.serverConnection?.offlineMode === true;
-      updateCheckSetting.settingEl.toggleClass('is-offline-suppressed', offline);
-      offlineHintEl.toggleClass('is-hidden', !offline);
-    };
-    refreshOfflineHintVisibility();
-    this.refreshAiLauncherUpdateHint = refreshOfflineHintVisibility;
   }
 
   private renderPresetScriptsList(listEl: HTMLElement): void {

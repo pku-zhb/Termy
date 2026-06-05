@@ -175,62 +175,8 @@ export function isContextAwarePresetScript(script: Pick<PresetScript, 'id'>): bo
   return CONTEXT_AWARE_PRESET_SCRIPT_IDS.has(script.id);
 }
 
-export const DEFAULT_PRESET_SCRIPTS: PresetScript[] = [
-  {
-    id: 'claude-code',
-    name: 'Claude Code',
-    icon: 'claude',
-    actions: [
-      {
-        id: 'action-claude-code',
-        type: 'terminal-command',
-        value: 'claude',
-        enabled: true,
-        note: '',
-      },
-    ],
-    terminalTitle: 'Claude Code',
-    showInStatusBar: true,
-    autoOpenTerminal: true,
-    runInNewTerminal: false,
-  },
-  {
-    id: 'codex',
-    name: 'Codex CLI',
-    icon: 'openai',
-    actions: [
-      {
-        id: 'action-codex',
-        type: 'terminal-command',
-        value: CODEX_LAUNCH_COMMAND,
-        enabled: true,
-        note: 'Launch Codex with Obsidian context',
-      },
-    ],
-    terminalTitle: 'Codex',
-    showInStatusBar: true,
-    autoOpenTerminal: true,
-    runInNewTerminal: false,
-  },
-  {
-    id: 'opencode',
-    name: 'OpenCode',
-    icon: 'opencode',
-    actions: [
-      {
-        id: 'action-opencode',
-        type: 'terminal-command',
-        value: OPENCODE_LAUNCH_COMMAND,
-        enabled: true,
-        note: 'Launch OpenCode with Obsidian context',
-      },
-    ],
-    terminalTitle: 'OpenCode',
-    showInStatusBar: true,
-    autoOpenTerminal: true,
-    runInNewTerminal: false,
-  },
-];
+// 魔改 fork：默认不预置任何 AI 启动器脚本（claude/codex/opencode）
+export const DEFAULT_PRESET_SCRIPTS: PresetScript[] = [];
 
 /**
  * Default platform shell configuration
