@@ -158,7 +158,8 @@ export type TermyTabNavAction =
   | { type: 'close' }
   | { type: 'next' }
   | { type: 'prev' }
-  | { type: 'goto'; index: number };
+  | { type: 'goto'; index: number }
+  | { type: 'rename' };
 
 export class TerminalInstance {
   readonly id: string;
@@ -1802,6 +1803,7 @@ export class TerminalInstance {
     if (event.shiftKey) return null;
     if (code === 'KeyT') return { type: 'new' };
     if (code === 'KeyW') return { type: 'close' };
+    if (code === 'KeyR') return { type: 'rename' };
     const digit = /^Digit([0-9])$/.exec(code);
     if (digit) {
       const d = parseInt(digit[1], 10);

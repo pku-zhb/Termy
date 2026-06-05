@@ -58,7 +58,7 @@ export type TerminalAttachOptions = {
 export class TerminalView extends ItemView {
   protected terminalService: TerminalService | null;
   private terminalInstance: TerminalInstance | null = null;  // 始终指向当前 active 终端
-  private tabs: Array<{ terminal: TerminalInstance; paneEl: HTMLElement }> = [];
+  private tabs: Array<{ terminal: TerminalInstance; paneEl: HTMLElement; name: string }> = [];
   private activeIndex = -1;
   private tabBarEl: HTMLElement | null = null;
   private terminalContainer: HTMLElement | null = null;
@@ -92,7 +92,8 @@ export class TerminalView extends ItemView {
   getViewType(): string { return TERMINAL_VIEW_TYPE; }
 
   getDisplayText(): string {
-    return this.terminalInstance?.getTitle() || t('terminal.defaultTitle');
+    // Ob 标签固定显示 "Termy"，不跟随终端自动标题
+    return 'Termy';
   }
 
   getIcon(): string { return 'terminal'; }
@@ -369,7 +370,7 @@ export class TerminalView extends ItemView {
     }
     this.registerTerminalHyperlinkHandler(terminal.getXterm());
 
-    this.tabs.push({ terminal, paneEl });
+    this.tabs.push({ terminal, paneEl, name: 'Terminal' });
     this.activeIndex = -1; // 强制 setActiveTab 重新绑定到新终端
     this.setActiveTab(this.tabs.length - 1);
   }
@@ -454,10 +455,16 @@ export class TerminalView extends ItemView {
     this.tabs.forEach((tab, i) => {
       const tabEl = bar.createDiv('termy-tab');
       tabEl.toggleClass('is-active', i === this.activeIndex);
+      tabEl.addEventListener('click', () => this.setActiveTab(i));
+
+      // 序号徽标，对应 Opt+数字切换键（1~9，第 10 个为 0）
+      if (i < 10) {
+        const indexEl = tabEl.createSpan('termy-tab-index');
+        indexEl.setText(i === 9 ? '0' : String(i + 1));
+      }
 
       const label = tabEl.createSpan('termy-tab-label');
-      label.setText(tab.terminal.getTitle() || t('terminal.defaultTitle'));
-      label.addEventListener('click', () => this.setActiveTab(i));
+      label.setText(tab.name);
 
       const closeBtn = tabEl.createSpan('termy-tab-close');
       setIcon(closeBtn, 'x');
@@ -489,6 +496,19 @@ export class TerminalView extends ItemView {
     }
   }
 
+  /** 重命名当前 active 标签（Opt+R）；改的是 tab 独立名字，不影响终端自动标题 */
+  renameActiveTab(): void {
+    const tab = this.tabs[this.activeIndex];
+    if (!tab) return;
+    new RenameTerminalModal(this.app, tab.name, (newName) => {
+      const trimmed = newName.trim();
+      if (trimmed) {
+        tab.name = trimmed;
+        this.renderTabBar();
+      }
+    }).open();
+  }
+
   private bindTerminalInstance(terminal: TerminalInstance): void {
     this.detachTerminalBindings();
     this.titleChangeCleanup = terminal.onTitleChange(() => {
@@ -515,6 +535,7 @@ export class TerminalView extends ItemView {
         case 'next': this.nextTab(); break;
         case 'prev': this.prevTab(); break;
         case 'goto': this.gotoTab(action.index); break;
+        case 'rename': this.renameActiveTab(); break;
       }
     });
 

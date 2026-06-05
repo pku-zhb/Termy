@@ -1142,6 +1142,7 @@ export default class TerminalPlugin extends Plugin {
 
     addTabCommand('terminal-tab-new', '新建终端标签', [{ modifiers: ['Alt'], key: 't' }], (v) => v.openNewTab());
     addTabCommand('terminal-tab-close', '关闭当前标签', [{ modifiers: ['Alt'], key: 'w' }], (v) => v.closeActiveTab());
+    addTabCommand('terminal-tab-rename', '重命名当前标签', [{ modifiers: ['Alt'], key: 'r' }], (v) => v.renameActiveTab());
     addTabCommand('terminal-tab-next', '下一个标签', [{ modifiers: ['Alt'], key: 'Tab' }], (v) => v.nextTab());
     addTabCommand('terminal-tab-prev', '上一个标签', [{ modifiers: ['Alt', 'Shift'], key: 'Tab' }], (v) => v.prevTab());
     for (let i = 1; i <= 9; i++) {

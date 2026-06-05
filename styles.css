@@ -2261,26 +2261,49 @@
 .termy-tab {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
   max-width: 180px;
-  padding: 3px 8px;
-  border-radius: var(--radius-s);
+  padding: 4px 8px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
   font-size: var(--font-ui-smaller);
   line-height: 1.2;
   color: var(--text-muted);
-  background-color: transparent;
+  background-color: var(--background-primary);
   cursor: pointer;
   user-select: none;
   white-space: nowrap;
+  transition: border-color 0.1s ease, background-color 0.1s ease;
 }
 .termy-tab:hover {
   background-color: var(--background-modifier-hover);
   color: var(--text-normal);
 }
 .termy-tab.is-active {
-  background-color: var(--background-primary);
   color: var(--text-normal);
   font-weight: var(--font-semibold);
+  border-color: var(--interactive-accent);
+  box-shadow: 0 0 0 1px var(--interactive-accent);
+}
+
+/* 序号徽标，对应 Opt+数字切换键 */
+.termy-tab-index {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 3px;
+  border-radius: var(--radius-s);
+  background-color: var(--background-modifier-border);
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: var(--font-semibold);
+  font-variant-numeric: tabular-nums;
+}
+.termy-tab.is-active .termy-tab-index {
+  background-color: var(--interactive-accent);
+  color: var(--text-on-accent);
 }
 .termy-tab-label {
   overflow: hidden;
