@@ -337,37 +337,6 @@ export class TerminalView extends ItemView {
     this.setupResizeObserver();
   }
 
-  private async initializeTerminal(): Promise<void> {
-    try {
-      if (!this.terminalService) {
-        throw new Error('TerminalService not initialized');
-      }
-
-      this.terminalInstance = await this.terminalService.createTerminal();
-      this.initResolve?.(this.terminalInstance);
-      this.initResolve = null;
-      this.initReject = null;
-
-      this.bindTerminalInstance(this.terminalInstance);
-      const xterm = this.terminalInstance.getXterm();
-      this.registerTerminalHyperlinkHandler(xterm);
-
-      this.updateAppearanceStyles();
-      this.attachTerminalToContainer();
-      this.setupResizeObserver();
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      errorLog('[TerminalView] Init failed:', errorMessage);
-      if (this.initReject) {
-        this.initReject(error instanceof Error ? error : new Error(errorMessage));
-        this.initResolve = null;
-        this.initReject = null;
-      }
-      new Notice(t('notices.terminal.initFailed', { message: errorMessage }));
-      this.leaf.detach();
-    }
-  }
-
   /**
    * Create a new terminal
    */
@@ -577,21 +546,6 @@ export class TerminalView extends ItemView {
     this.titleChangeCleanup = null;
     this.searchStateCleanup?.();
     this.searchStateCleanup = null;
-  }
-
-  /**
-   * Split the terminal (used by commands)
-   */
-  async splitTerminal(direction: 'horizontal' | 'vertical'): Promise<void> {
-    const { workspace } = this.app;
-    const newLeaf = workspace.getLeaf('split', direction);
-    
-    await newLeaf.setViewState({
-      type: TERMINAL_VIEW_TYPE,
-      active: true,
-    });
-
-    workspace.setActiveLeaf(newLeaf, { focus: true });
   }
 
   private setupDropHandlers(): () => void {

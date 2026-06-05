@@ -1296,29 +1296,6 @@ export class TerminalInstance {
       'Ctrl+O'
     ));
 
-    // Split terminal submenu
-    const splitSubmenu = this.createSubmenuItem(
-      menuDocument,
-      menuWindow,
-      t('terminal.contextMenu.splitTerminal'),
-      'columns',
-      [
-        {
-          label: t('terminal.contextMenu.splitHorizontal'),
-          icon: 'separator-horizontal',
-          onClick: () => this.contextMenuCallbacks.onSplitTerminal?.('horizontal'),
-          shortcut: 'Ctrl+Shift+H'
-        },
-        {
-          label: t('terminal.contextMenu.splitVertical'),
-          icon: 'separator-vertical',
-          onClick: () => this.contextMenuCallbacks.onSplitTerminal?.('vertical'),
-          shortcut: 'Ctrl+Shift+J'
-        }
-      ]
-    );
-    menu.appendChild(splitSubmenu);
-
     const defaultShellOptions = this.contextMenuCallbacks.getDefaultShellOptions?.() ?? [];
     if (defaultShellOptions.length > 0 && this.contextMenuCallbacks.onDefaultShellChange) {
       menu.appendChild(this.createSubmenuItem(
@@ -1817,13 +1794,6 @@ export class TerminalInstance {
    */
   setOnNewTerminal(callback: () => void): void {
     this.contextMenuCallbacks.onNewTerminal = callback;
-  }
-
-  /**
-   * Set the split terminal callback
-   */
-  setOnSplitTerminal(callback: (direction: 'horizontal' | 'vertical') => void): void {
-    this.contextMenuCallbacks.onSplitTerminal = callback;
   }
 
   private tabNavCallback: ((action: TermyTabNavAction) => void) | null = null;
