@@ -1463,6 +1463,16 @@ export default class TerminalPlugin extends Plugin {
       })
     );
 
+    // 切回 Termy 标签时自动把焦点送进当前终端，避免焦点卡在标签头按钮（后退/前进/更多）上
+    this.registerEvent(
+      this.app.workspace.on('active-leaf-change', (leaf) => {
+        const view = leaf?.view;
+        if (view instanceof TerminalView) {
+          window.setTimeout(() => view.focusActiveTerminal(), 0);
+        }
+      })
+    );
+
     // Initial injection
     this.injectTerminalButtonToEmptyViews();
   }

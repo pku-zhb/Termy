@@ -2337,3 +2337,8 @@
   display: flex;
   flex-direction: column;
 }
+
+/* 隐藏 Termy 终端 view 的 Obsidian 头部栏（后退/前进/标题/更多选项），界面更干净 */
+.workspace-leaf-content[data-type="terminal-view-dev"] .view-header {
+  display: none;
+}

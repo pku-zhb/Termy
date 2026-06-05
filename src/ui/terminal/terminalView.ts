@@ -480,6 +480,15 @@ export class TerminalView extends ItemView {
   gotoTab(n: number): void { if (n >= 0 && n < this.tabs.length) this.setActiveTab(n); }
   getTabCount(): number { return this.tabs.length; }
 
+  /** 聚焦当前 active 终端（供切回 Obsidian 标签时自动 focus，避免焦点卡在标签头按钮上） */
+  focusActiveTerminal(): void {
+    const terminal = this.tabs[this.activeIndex]?.terminal;
+    if (terminal?.isAlive()) {
+      terminal.fit();
+      terminal.focus();
+    }
+  }
+
   private bindTerminalInstance(terminal: TerminalInstance): void {
     this.detachTerminalBindings();
     this.titleChangeCleanup = terminal.onTitleChange(() => {
