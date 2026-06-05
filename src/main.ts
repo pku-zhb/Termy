@@ -12,8 +12,6 @@ import { renderPresetScriptIcon } from './ui/terminal/presetScriptIcons';
 import { TerminalSettingTab } from './settings/settingsTab';
 import type { TerminalService } from './services/terminal/terminalService';
 import type { ServerManager } from './services/server/serverManager';
-import type { ClaudeCodeIdeBridge } from './services/claudeCode/ideBridge';
-import type { AgentContextBridge } from './services/context/agentContextBridge';
 import { TERMINAL_VIEW_TYPE, TerminalView } from './ui/terminal/terminalView';
 import { ChangelogModal } from './ui/changelog/changelogModal';
 import { i18n, t } from './i18n';
@@ -94,8 +92,6 @@ export default class TerminalPlugin extends Plugin {
   // Lazily initialized services
   private _serverManager: ServerManager | null = null;
   private _terminalService: TerminalService | null = null;
-  private _claudeCodeIdeBridge: ClaudeCodeIdeBridge | null = null;
-  private _agentContextBridge: AgentContextBridge | null = null;
   private _changelogContentCache: string | null = null;
   private _changelogSectionCache: Map<string, ChangelogDetails> = new Map();
   
@@ -165,9 +161,6 @@ export default class TerminalPlugin extends Plugin {
    * Get the terminal service (lazy initialization)
    */
   async getTerminalService(): Promise<TerminalService> {
-    await this.initializeClaudeCodeIdeBridge();
-    await this.initializeAgentContextBridge();
-
     if (!this._terminalService) {
       debugLog('[TerminalPlugin] Initializing TerminalService...');
       
@@ -178,10 +171,7 @@ export default class TerminalPlugin extends Plugin {
           this.app,
           this.settings,
           serverManager,
-          () => ({
-            ...(this._claudeCodeIdeBridge?.getTerminalEnv() ?? {}),
-            ...(this._agentContextBridge?.getTerminalEnv() ?? {}),
-          }),
+          () => ({}),
           () => this.saveSettings(),
         );
       
@@ -224,13 +214,6 @@ export default class TerminalPlugin extends Plugin {
 
     // Register all commands
     this.registerCommands();
-
-    void this.initializeClaudeCodeIdeBridge().catch((error) => {
-      errorLog('[TerminalPlugin] Failed to initialize Claude Code IDE bridge:', error);
-    });
-    void this.initializeAgentContextBridge().catch((error) => {
-      errorLog('[TerminalPlugin] Failed to initialize agent context bridge:', error);
-    });
 
     // Delay UI initialization until the layout is ready whenever possible
     this.app.workspace.onLayoutReady(() => {
@@ -299,45 +282,7 @@ export default class TerminalPlugin extends Plugin {
       }
     }
 
-    if (this._claudeCodeIdeBridge) {
-      try {
-        debugLog('[TerminalPlugin] Shutting down Claude Code IDE bridge...');
-        await this._claudeCodeIdeBridge.stop();
-        debugLog('[TerminalPlugin] Claude Code IDE bridge stopped');
-      } catch (error) {
-        errorLog('[TerminalPlugin] Failed to stop Claude Code IDE bridge:', error);
-      }
-    }
-
-    if (this._agentContextBridge) {
-      try {
-        debugLog('[TerminalPlugin] Shutting down agent context bridge...');
-        this._agentContextBridge.stop();
-        debugLog('[TerminalPlugin] Agent context bridge stopped');
-      } catch (error) {
-        errorLog('[TerminalPlugin] Failed to stop agent context bridge:', error);
-      }
-    }
-
     debugLog(t('plugin.unloadedMessage'));
-  }
-
-  private async initializeClaudeCodeIdeBridge(): Promise<void> {
-    if (!this._claudeCodeIdeBridge) {
-      const { ClaudeCodeIdeBridge } = await import('./services/claudeCode/ideBridge');
-      this._claudeCodeIdeBridge = new ClaudeCodeIdeBridge(this.app, this.manifest.version);
-    }
-
-    await this._claudeCodeIdeBridge.start();
-  }
-
-  private async initializeAgentContextBridge(): Promise<void> {
-    if (!this._agentContextBridge) {
-      const { AgentContextBridge } = await import('./services/context/agentContextBridge');
-      this._agentContextBridge = new AgentContextBridge(this.app, this.getPluginDir());
-    }
-
-    this._agentContextBridge.start();
   }
 
   showChangelog(version = this.manifest.version): void {
