@@ -9,7 +9,7 @@ import { getHomeDir, getPlatform, isWindows } from '@/utils/platform';
 import { t } from '@/i18n';
 import type { ServerManager } from '@/services/server/serverManager';
 import type { PtyClient } from '@/services/server/ptyClient';
-import type { PtyConfig, ShellEvent, ShellEventSource } from '@/services/server/types';
+import type { ForegroundInfo, PtyConfig, ShellEvent, ShellEventSource } from '@/services/server/types';
 import type { DefaultShellOption } from './terminalService';
 import { EnhancedKeyboardProtocol, formatPastedTerminalText } from './enhancedKeyboardProtocol';
 import {
@@ -182,6 +182,7 @@ export class TerminalInstance {
   private exitUnsubscribe: (() => void) | null = null;
   private errorUnsubscribe: (() => void) | null = null;
   private shellEventUnsubscribe: (() => void) | null = null;
+  private foregroundUnsubscribe: (() => void) | null = null;
   
   private containerEl: HTMLElement | null = null;
   private options: TerminalOptions;
@@ -224,6 +225,8 @@ export class TerminalInstance {
 
   // Shell integration events
   private shellEventCallback: ((event: ShellEvent) => void) | null = null;
+  private foregroundCallback: ((info: ForegroundInfo) => void) | null = null;
+  private currentForeground: ForegroundInfo | null = null;
   private commandHistory: Array<{
     startTime: number;
     endTime: number;
@@ -600,6 +603,12 @@ export class TerminalInstance {
     this.shellEventUnsubscribe = this.ptyClient.onSessionShellEvent(this.sessionId, (event: ShellEvent) => {
       this.handleShellEvent(event);
     });
+
+    // 前台进程变化（方案 A：用于 tab 状态检测 tmux/ssh/claude/codex）
+    this.foregroundUnsubscribe = this.ptyClient.onSessionForeground(this.sessionId, (info: ForegroundInfo) => {
+      this.currentForeground = info;
+      this.foregroundCallback?.(info);
+    });
   }
 
   private buildPtyConfig(cwd: string | undefined): PtyConfig {
@@ -645,6 +654,7 @@ export class TerminalInstance {
     this.exitUnsubscribe?.();
     this.errorUnsubscribe?.();
     this.shellEventUnsubscribe?.();
+    this.foregroundUnsubscribe?.();
 
     this.outputUnsubscribe = null;
     this.exitUnsubscribe = null;
@@ -1706,6 +1716,18 @@ export class TerminalInstance {
    */
   onShellEvent(callback: (event: ShellEvent) => void): void {
     this.shellEventCallback = callback;
+  }
+
+  /** 注册前台进程变化回调（方案 A）；注册时立即回放当前状态 */
+  onForegroundChange(callback: (info: ForegroundInfo) => void): void {
+    this.foregroundCallback = callback;
+    if (this.currentForeground) {
+      callback(this.currentForeground);
+    }
+  }
+
+  getForeground(): ForegroundInfo | null {
+    return this.currentForeground;
   }
 
   /**

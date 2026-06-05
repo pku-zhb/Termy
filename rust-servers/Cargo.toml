@@ -34,6 +34,10 @@ async-trait = "0.1"
 # UUID generation
 uuid = { version = "1.0", features = ["v4"] }
 
+# 前台进程检测（方案 A：读 PTY 前台进程名/命令行）
+libc = "0.2"
+libproc = "0.14"
+
 # Shared release profile configuration
 [profile.release]
 opt-level = 3       # Optimize for speed rather than size

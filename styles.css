@@ -2305,6 +2305,31 @@
   background-color: var(--interactive-accent);
   color: var(--text-on-accent);
 }
+
+/* tmux 在前台运行：序号绿底 */
+.termy-tab-index.is-tmux,
+.termy-tab.is-active .termy-tab-index.is-tmux {
+  background-color: var(--color-green, #3fb950);
+  color: #fff;
+}
+
+/* 状态图标（claude / codex 图标，ssh 地球） */
+.termy-tab-status-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+}
+.termy-tab-status-icon svg {
+  width: 13px;
+  height: 13px;
+}
+img.termy-tab-status-icon {
+  object-fit: contain;
+  border-radius: 2px;
+}
 .termy-tab-label {
   overflow: hidden;
   text-overflow: ellipsis;

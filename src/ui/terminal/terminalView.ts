@@ -16,6 +16,8 @@ type PathModule = typeof import('path');
 
 import type { TerminalService } from '../../services/terminal/terminalService';
 import type { TerminalInstance } from '../../services/terminal/terminalInstance';
+import type { ForegroundInfo } from '../../services/server/types';
+import { CLAUDE_ICON, CODEX_ICON } from './statusIcons';
 import {
   collectFallbackDroppedTextPayload,
   collectPreferredDroppedTextPayload,
@@ -46,6 +48,20 @@ import { t } from '../../i18n';
 import { RenameTerminalModal } from './renameTerminalModal';
 type XtermTerminal = import('@xterm/xterm').Terminal;
 
+type TabStatus = 'none' | 'tmux' | 'ssh' | 'claude' | 'codex';
+
+/** 根据前台进程信息分类 tab 状态（进程名精确，避免 vim claude.md 这类误判） */
+function classifyForeground(info: ForegroundInfo | null): TabStatus {
+  if (!info) return 'none';
+  const name = info.name.toLowerCase();
+  const cmd = info.cmdline.toLowerCase();
+  if (name.includes('tmux')) return 'tmux';
+  if (name === 'ssh') return 'ssh';
+  if (name === 'claude' || (name === 'node' && cmd.includes('claude'))) return 'claude';
+  if (name === 'codex' || (name === 'node' && cmd.includes('codex'))) return 'codex';
+  return 'none';
+}
+
 export const TERMINAL_VIEW_TYPE = 'terminal-view-dev';
 
 export type TerminalAttachOptions = {
@@ -58,7 +74,7 @@ export type TerminalAttachOptions = {
 export class TerminalView extends ItemView {
   protected terminalService: TerminalService | null;
   private terminalInstance: TerminalInstance | null = null;  // 始终指向当前 active 终端
-  private tabs: Array<{ terminal: TerminalInstance; paneEl: HTMLElement; name: string }> = [];
+  private tabs: Array<{ terminal: TerminalInstance; paneEl: HTMLElement; customName: string | null; status: TabStatus }> = [];
   private activeIndex = -1;
   private tabBarEl: HTMLElement | null = null;
   private terminalContainer: HTMLElement | null = null;
@@ -370,7 +386,19 @@ export class TerminalView extends ItemView {
     }
     this.registerTerminalHyperlinkHandler(terminal.getXterm());
 
-    this.tabs.push({ terminal, paneEl, name: 'Terminal' });
+    this.tabs.push({ terminal, paneEl, customName: null, status: 'none' });
+
+    // 订阅前台进程变化，更新该 tab 状态（tmux/ssh/claude/codex）
+    terminal.onForegroundChange((info) => {
+      const tab = this.tabs.find((t) => t.terminal === terminal);
+      if (!tab) return;
+      const next = classifyForeground(info);
+      if (tab.status !== next) {
+        tab.status = next;
+        this.renderTabBar();
+      }
+    });
+
     this.activeIndex = -1; // 强制 setActiveTab 重新绑定到新终端
     this.setActiveTab(this.tabs.length - 1);
   }
@@ -457,14 +485,27 @@ export class TerminalView extends ItemView {
       tabEl.toggleClass('is-active', i === this.activeIndex);
       tabEl.addEventListener('click', () => this.setActiveTab(i));
 
-      // 序号徽标，对应 Opt+数字切换键（1~9，第 10 个为 0）
+      // 序号徽标，对应 Opt+数字切换键（1~9，第 10 个为 0）；tmux 时绿底
       if (i < 10) {
         const indexEl = tabEl.createSpan('termy-tab-index');
         indexEl.setText(i === 9 ? '0' : String(i + 1));
+        indexEl.toggleClass('is-tmux', tab.status === 'tmux');
       }
 
-      const label = tabEl.createSpan('termy-tab-label');
-      label.setText(tab.name);
+      // 状态图标：claude/codex 用各自图标，ssh 用地球
+      if (tab.status === 'claude' || tab.status === 'codex') {
+        const iconEl = tabEl.createEl('img', { cls: 'termy-tab-status-icon' });
+        iconEl.src = tab.status === 'claude' ? CLAUDE_ICON : CODEX_ICON;
+      } else if (tab.status === 'ssh') {
+        const iconEl = tabEl.createSpan('termy-tab-status-icon');
+        setIcon(iconEl, 'globe');
+      }
+
+      // 仅当用户重命名过才显示名字（否则只有序号 + 状态）
+      if (tab.customName) {
+        const label = tabEl.createSpan('termy-tab-label');
+        label.setText(tab.customName);
+      }
 
       const closeBtn = tabEl.createSpan('termy-tab-close');
       setIcon(closeBtn, 'x');
@@ -500,12 +541,10 @@ export class TerminalView extends ItemView {
   renameActiveTab(): void {
     const tab = this.tabs[this.activeIndex];
     if (!tab) return;
-    new RenameTerminalModal(this.app, tab.name, (newName) => {
+    new RenameTerminalModal(this.app, tab.customName ?? '', (newName) => {
       const trimmed = newName.trim();
-      if (trimmed) {
-        tab.name = trimmed;
-        this.renderTabBar();
-      }
+      tab.customName = trimmed || null;
+      this.renderTabBar();
     }).open();
   }
 

@@ -7,6 +7,7 @@
 
 import { ModuleClient } from './moduleClient';
 import type {
+  ForegroundInfo,
   PtyConfig,
   ServerMessage,
   SessionEventListeners,
@@ -205,6 +206,13 @@ export class PtyClient extends ModuleClient {
   }
 
   /**
+   * Register a session-scoped foreground-process listener
+   */
+  onSessionForeground(sessionId: string, handler: (info: ForegroundInfo) => void): () => void {
+    return this.onSession(sessionId, 'foreground', handler);
+  }
+
+  /**
    * Register a session-scoped event listener
    */
   private onSession<K extends keyof SessionEventListeners>(
@@ -218,6 +226,7 @@ export class PtyClient extends ModuleClient {
         exit: new Set(),
         error: new Set(),
         shellEvent: new Set(),
+        foreground: new Set(),
       });
     }
     
@@ -299,6 +308,19 @@ export class PtyClient extends ModuleClient {
     }
   }
 
+  private emitSessionForeground(sessionId: string, info: ForegroundInfo): void {
+    const listeners = this.sessionListeners.get(sessionId);
+    if (listeners) {
+      listeners.foreground.forEach(handler => {
+        try {
+          handler(info);
+        } catch (error) {
+          errorLog(`[PtyClient] 会话事件处理器错误 (${sessionId}/foreground):`, error);
+        }
+      });
+    }
+  }
+
   /**
    * Handle server messages
    */
@@ -358,6 +380,14 @@ export class PtyClient extends ModuleClient {
           const source = (msg.source as ShellEventSource) || 'osc133';
           const exitCode = typeof msg.exit_code === 'number' ? msg.exit_code : null;
           this.emitSessionShellEvent(sessionId, { type, source, exitCode });
+        }
+        break;
+
+      case 'foreground':
+        if (sessionId) {
+          const name = (msg.name as string) || '';
+          const cmdline = (msg.cmdline as string) || '';
+          this.emitSessionForeground(sessionId, { name, cmdline });
         }
         break;
     }

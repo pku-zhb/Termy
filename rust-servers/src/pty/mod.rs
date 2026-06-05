@@ -132,7 +132,10 @@ impl PtyHandler {
             cwd.as_deref(),
             env.as_ref(),
         ).map_err(|e| RouterError::ModuleError(format!("创建 PTY 会话失败: {}", e)))?;
-        
+
+        // 提取 master fd（用于前台进程检测，方案 A；fd 在 session 存活期间有效）
+        let master_fd = pty_session.master_raw_fd();
+
         // Create the session context
         let pty_session = Arc::new(TokioMutex::new(pty_session));
         let pty_reader = Arc::new(Mutex::new(pty_reader));
@@ -144,7 +147,7 @@ impl PtyHandler {
         );
         
         // Start the PTY output reader task
-        let read_task = self.start_read_task(session_id.clone(), pty_reader, pty_writer, shell_type).await?;
+        let read_task = self.start_read_task(session_id.clone(), pty_reader, pty_writer, shell_type, master_fd).await?;
         context.read_task = Some(read_task);
         
         // Store the session context
@@ -175,6 +178,7 @@ impl PtyHandler {
         reader: Arc<Mutex<PtyReader>>,
         _writer: Arc<Mutex<PtyWriter>>,
         _shell_type: Option<String>,
+        master_fd: Option<i32>,
     ) -> Result<tokio::task::JoinHandle<()>, RouterError> {
         const OUTPUT_BATCH_INTERVAL_MS: u64 = 4;
         const READ_BUFFER_SIZE: usize = 8192;
@@ -227,10 +231,40 @@ impl PtyHandler {
             let mut osc_scanner = OscScanner::new();
             let mut pending_shell_events: Vec<OscEvent> = Vec::new();
 
+            let mut last_fg: Option<(String, String)> = None;
+            const FG_POLL_MS: u64 = 1000;
+
             loop {
-                let first_event = match read_rx.recv().await {
+                // 带超时地等输出；超时则仅做前台进程轮询（无输出时也能检测）
+                let maybe_event = match time::timeout(Duration::from_millis(FG_POLL_MS), read_rx.recv()).await {
+                    Ok(Some(event)) => Some(event),
+                    Ok(None) => break,
+                    Err(_) => None,
+                };
+
+                // 前台进程检测：变化则上报前端（tmux/ssh/claude/codex…）
+                if let Some(fd) = master_fd {
+                    let current = session::foreground_process(fd);
+                    if current != last_fg {
+                        last_fg = current.clone();
+                        let (name, cmdline) = current.clone().unwrap_or_default();
+                        let fg_payload = serde_json::json!({
+                            "session_id": session_id,
+                            "name": name,
+                            "cmdline": cmdline,
+                        });
+                        let response = ServerResponse::new(ModuleType::Pty, "foreground", fg_payload);
+                        let mut sender = ws_sender.lock().await;
+                        if let Err(e) = sender.send(Message::Text(response.to_json().into())).await {
+                            log_error!("发送 foreground 失败: session_id={}, {}", session_id, e);
+                            break;
+                        }
+                    }
+                }
+
+                let first_event = match maybe_event {
                     Some(event) => event,
-                    None => break,
+                    None => continue,
                 };
 
                 let mut pending_exit = false;

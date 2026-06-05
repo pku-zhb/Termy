@@ -150,6 +150,12 @@ export interface PtyInitResponse {
 /**
  * Session-scoped event listeners
  */
+/** 前台进程信息（方案 A：内核级前台进程检测） */
+export interface ForegroundInfo {
+  name: string;
+  cmdline: string;
+}
+
 export interface SessionEventListeners {
   /** Output data handlers */
   output: Set<(data: Uint8Array) => void>;
@@ -159,6 +165,8 @@ export interface SessionEventListeners {
   error: Set<(code: string, message: string) => void>;
   /** Shell integration event handlers */
   shellEvent: Set<(event: ShellEvent) => void>;
+  /** 前台进程变化处理器 */
+  foreground: Set<(info: ForegroundInfo) => void>;
 }
 
 /**
