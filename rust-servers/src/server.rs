@@ -5,6 +5,7 @@ use tokio::net::TcpListener;
 use tokio_tungstenite::{accept_async, tungstenite::Message};
 use futures_util::{StreamExt, SinkExt};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use tokio::sync::Mutex as TokioMutex;
 
 use crate::router::{MessageRouter, ModuleType, RouterError, ServerResponse};
@@ -28,6 +29,36 @@ macro_rules! log_debug {
             eprintln!("[DEBUG] {}", format!($($arg)*));
         }
     };
+}
+
+// ============================================================================
+// 自我了断：无活跃连接超时则退出，避免前端 reload 时残留旧 server
+// ============================================================================
+
+static ACTIVE_CONNECTIONS: AtomicUsize = AtomicUsize::new(0);
+static LAST_ACTIVE_SECS: AtomicU64 = AtomicU64::new(0);
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// 连接生命周期 RAII：进入 +1、离开 -1，并刷新最后活跃时间
+struct ConnectionGuard;
+impl ConnectionGuard {
+    fn enter() -> Self {
+        ACTIVE_CONNECTIONS.fetch_add(1, Ordering::SeqCst);
+        LAST_ACTIVE_SECS.store(now_secs(), Ordering::SeqCst);
+        ConnectionGuard
+    }
+}
+impl Drop for ConnectionGuard {
+    fn drop(&mut self) {
+        ACTIVE_CONNECTIONS.fetch_sub(1, Ordering::SeqCst);
+        LAST_ACTIVE_SECS.store(now_secs(), Ordering::SeqCst);
+    }
 }
 
 // ============================================================================
@@ -66,6 +97,24 @@ impl Server {
             std::process::id()
         );
 
+        // 初始化最后活跃时间（启动后有宽限期等待前端首次连接）
+        LAST_ACTIVE_SECS.store(now_secs(), Ordering::SeqCst);
+
+        // 自我了断看门狗：无活跃连接持续超时则退出（彻底避免 reload 残留）
+        tokio::spawn(async move {
+            const IDLE_TIMEOUT_SECS: u64 = 30;
+            let mut ticker = tokio::time::interval(std::time::Duration::from_secs(5));
+            loop {
+                ticker.tick().await;
+                let active = ACTIVE_CONNECTIONS.load(Ordering::SeqCst);
+                let idle = now_secs().saturating_sub(LAST_ACTIVE_SECS.load(Ordering::SeqCst));
+                if active == 0 && idle >= IDLE_TIMEOUT_SECS {
+                    log_info!("无活跃 WebSocket 连接已 {}s，自我退出以避免残留", idle);
+                    std::process::exit(0);
+                }
+            }
+        });
+
         // Main loop: accept WebSocket connections
         tokio::spawn(async move {
             log_info!("正在监听 WebSocket 连接...");
@@ -101,7 +150,10 @@ async fn handle_connection(
     let ws_stream = accept_async(stream).await?;
     
     log_info!("WebSocket 连接已建立");
-    
+
+    // 连接计数（RAII：函数返回时自动 -1，供自我了断看门狗判断）
+    let _conn_guard = ConnectionGuard::enter();
+
     // Split the read and write streams
     let (ws_sender, mut ws_receiver) = ws_stream.split();
     let ws_sender: WsSender = Arc::new(TokioMutex::new(ws_sender));
