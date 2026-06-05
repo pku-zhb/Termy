@@ -1116,54 +1116,6 @@ export default class TerminalPlugin extends Plugin {
     });
 
     this.addCommand({
-      id: 'terminal-send-selection',
-      name: t('commands.terminalSendSelection'),
-      checkCallback: (checking: boolean) => {
-        if (!this.featureVisibilityManager.isVisibleAt('terminal', 'showInCommandPalette')) {
-          return false;
-        }
-
-        if (!checking) {
-          this.sendEditorSelectionToTerminal();
-        }
-
-        return true;
-      }
-    });
-
-    this.addCommand({
-      id: 'terminal-send-current-note',
-      name: t('commands.terminalSendCurrentNote'),
-      checkCallback: (checking: boolean) => {
-        if (!this.featureVisibilityManager.isVisibleAt('terminal', 'showInCommandPalette')) {
-          return false;
-        }
-
-        if (!checking) {
-          this.sendCurrentNoteToTerminal();
-        }
-
-        return true;
-      }
-    });
-
-    this.addCommand({
-      id: 'terminal-send-current-path',
-      name: t('commands.terminalSendCurrentPath'),
-      checkCallback: (checking: boolean) => {
-        if (!this.featureVisibilityManager.isVisibleAt('terminal', 'showInCommandPalette')) {
-          return false;
-        }
-
-        if (!checking) {
-          this.sendCurrentPathToTerminal();
-        }
-
-        return true;
-      }
-    });
-
-    this.addCommand({
       id: 'terminal-prompt-previous',
       name: t('commands.terminalPromptPrevious'),
       checkCallback: (checking: boolean) => {
@@ -1298,76 +1250,6 @@ export default class TerminalPlugin extends Plugin {
   private focusTerminalView(terminalView: TerminalView, terminal: TerminalInstance): void {
     this.app.workspace.setActiveLeaf(terminalView.leaf, { focus: true });
     terminal.focus();
-  }
-
-  private getActiveEditorContext(): { editor: { getSelection: () => string; getValue: () => string } | null; filePath: string | null } {
-    const activeEditor = (this.app.workspace as typeof this.app.workspace & {
-      activeEditor?: {
-        editor?: { getSelection: () => string; getValue: () => string };
-        file?: { path: string };
-      };
-    }).activeEditor;
-
-    return {
-      editor: activeEditor?.editor ?? null,
-      filePath: activeEditor?.file?.path ?? this.app.workspace.getActiveFile()?.path ?? null,
-    };
-  }
-
-  private sendEditorSelectionToTerminal(): void {
-    const terminalView = this.getActiveTerminalView();
-    const terminal = terminalView?.getTerminalInstance();
-    if (!terminalView || !terminal) {
-      new Notice(t('notices.presetScript.terminalUnavailable'));
-      return;
-    }
-
-    const { editor } = this.getActiveEditorContext();
-    const selection = editor?.getSelection()?.trim() ?? '';
-    if (!selection) {
-      new Notice(t('notices.terminal.selectionRequired'));
-      return;
-    }
-
-    terminal.pasteText(selection);
-    this.focusTerminalView(terminalView, terminal);
-  }
-
-  private sendCurrentNoteToTerminal(): void {
-    const terminalView = this.getActiveTerminalView();
-    const terminal = terminalView?.getTerminalInstance();
-    if (!terminalView || !terminal) {
-      new Notice(t('notices.presetScript.terminalUnavailable'));
-      return;
-    }
-
-    const { editor } = this.getActiveEditorContext();
-    const noteText = editor?.getValue() ?? '';
-    if (!noteText.trim()) {
-      new Notice(t('notices.terminal.noteRequired'));
-      return;
-    }
-
-    terminal.pasteText(noteText);
-    this.focusTerminalView(terminalView, terminal);
-  }
-
-  private sendCurrentPathToTerminal(): void {
-    const terminalView = this.getActiveTerminalView();
-    const terminal = terminalView?.getTerminalInstance();
-    if (!terminalView || !terminal) {
-      new Notice(t('notices.presetScript.terminalUnavailable'));
-      return;
-    }
-
-    const { filePath } = this.getActiveEditorContext();
-    if (!filePath) {
-      new Notice(t('notices.terminal.filePathRequired'));
-      return;
-    }
-
-    terminal.sendText(normalizePath(filePath));
-    this.focusTerminalView(terminalView, terminal);
   }
 
   private navigateTerminalPrompt(direction: 'previous' | 'next'): void {
