@@ -1276,16 +1276,6 @@ export class TerminalInstance {
 
     menu.appendChild(this.createSeparator(menuDocument));
 
-    if (this.contextMenuCallbacks.onToggleAlwaysOnTop) {
-      menu.appendChild(this.createMenuItem(
-        menuDocument,
-        this.contextMenuCallbacks.getAlwaysOnTopLabel?.() ?? t('terminal.contextMenu.pinToTop'),
-        'lock',
-        true,
-        () => this.contextMenuCallbacks.onToggleAlwaysOnTop?.()
-      ));
-    }
-
     // New terminal
     menu.appendChild(this.createMenuItem(
       menuDocument,

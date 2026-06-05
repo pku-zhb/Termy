@@ -127,16 +127,6 @@ export class TerminalView extends ItemView {
         });
     });
 
-    const plugin = this.getTerminalPlugin();
-    if (plugin) {
-      menu.addItem((item) => {
-        item.setTitle(plugin.getAlwaysOnTopTerminalLabel(view))
-          .setIcon('pin')
-          .onClick(() => {
-            void plugin.toggleAlwaysOnTopTerminal(view);
-          });
-      });
-    }
   }
 
   onOpen(): Promise<void> {
@@ -518,16 +508,6 @@ export class TerminalView extends ItemView {
         case 'goto': this.gotoTab(action.index); break;
       }
     });
-
-    terminal.setOnToggleAlwaysOnTop(
-      () => {
-        const plugin = this.getTerminalPlugin();
-        if (plugin) {
-          void plugin.toggleAlwaysOnTopTerminal(this);
-        }
-      },
-      () => this.getTerminalPlugin()?.getAlwaysOnTopTerminalLabel(this) ?? t('terminal.contextMenu.pinToTop')
-    );
 
     terminal.setDefaultShellMenuCallbacks(
       () => this.terminalService?.getDefaultShellOptions() ?? [],

@@ -991,25 +991,6 @@ export default class TerminalPlugin extends Plugin {
       },
     });
 
-    this.addCommand({
-      id: 'terminal-toggle-always-on-top',
-      name: t('commands.terminalToggleAlwaysOnTop'),
-      checkCallback: (checking: boolean) => {
-        if (!this.featureVisibilityManager.isVisibleAt('terminal', 'showInCommandPalette')) {
-          return false;
-        }
-
-        const terminalView = this.getActiveTerminalView();
-        if (!terminalView && !this._alwaysOnTopTerminalLeaf) {
-          return false;
-        }
-
-        if (!checking) {
-          void this.toggleAlwaysOnTopTerminal(terminalView);
-        }
-        return true;
-      },
-    });
 
     // Clear screen
     this.addCommand({
