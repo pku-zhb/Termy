@@ -400,12 +400,12 @@ export class ServerManager {
    * Get the binary path
    */
   private getBinaryPath(): string {
-    const platform = process.platform;
-    const arch = process.arch;
-    const ext = platform === 'win32' ? '.exe' : '';
-    const filename = `termy-server-${platform}-${arch}${ext}`;
-    
-    return this.path.join(this.pluginDir, 'binaries', filename);
+    // 魔改 fork：termy-server 作为外置 CLI 安装（cargo install --path rust-servers
+    // → ~/.cargo/bin/termy-server），不再放插件目录 —— 避免被坚果云同步、也避免
+    // 自动下载覆盖。配合离线模式使用（离线模式只检查此路径是否存在、不下载）。
+    const ext = process.platform === 'win32' ? '.exe' : '';
+    const home = (window.require('os') as { homedir(): string }).homedir();
+    return this.path.join(home, '.cargo', 'bin', `termy-server${ext}`);
   }
 
   private async ensureBinaryReady(): Promise<BinaryUpdateResult> {
