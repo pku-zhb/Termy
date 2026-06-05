@@ -199,7 +199,6 @@ export default class TerminalPlugin extends Plugin {
 
     // Delay UI initialization until the layout is ready whenever possible
     this.app.workspace.onLayoutReady(() => {
-      this.initStatusBar();
       if (this.settings.visibility.showInNewTab) {
         this.registerNewTabTerminalAction();
       }
@@ -306,9 +305,6 @@ export default class TerminalPlugin extends Plugin {
     if (this._terminalService) {
       this._terminalService.updateSettings(this.settings);
     }
-
-    // Register newly added preset script commands
-    this.registerPresetScriptCommands();
   }
 
   private normalizePresetScripts(value: unknown): PresetScript[] {
@@ -1071,9 +1067,6 @@ export default class TerminalPlugin extends Plugin {
         return true;
       }
     });
-
-    // Register preset script commands
-    this.registerPresetScriptCommands();
   }
 
   private registerPresetScriptCommands(): void {
