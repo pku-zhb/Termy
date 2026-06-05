@@ -1136,43 +1136,38 @@ export default class TerminalPlugin extends Plugin {
       }
     });
 
-    // Split horizontally
-    this.addCommand({
-      id: 'terminal-split-horizontal',
-      name: t('commands.terminalSplitHorizontal'),
-      checkCallback: (checking: boolean) => {
-        if (!this.featureVisibilityManager.isVisibleAt('terminal', 'showInCommandPalette')) {
-          return false;
-        }
-        const terminalView = this.getActiveTerminalView();
-        if (terminalView) {
-          if (!checking) {
-            void terminalView.splitTerminal('horizontal');
+    // —— Termy Dev: 内部 tab 导航命令 ——
+    // 默认 Opt(Alt) 系快捷键；终端聚焦时实际由 xterm 层直接响应（见 terminalInstance.matchTabNavKey），
+    // 这里注册为正式 Obsidian 命令，便于在命令面板 / 快捷键设置中可见可改。
+    const addTabCommand = (
+      id: string,
+      name: string,
+      hotkeys: Array<{ modifiers: ('Mod' | 'Ctrl' | 'Meta' | 'Alt' | 'Shift')[]; key: string }>,
+      run: (view: TerminalView) => void,
+    ): void => {
+      this.addCommand({
+        id,
+        name,
+        hotkeys,
+        checkCallback: (checking: boolean) => {
+          const terminalView = this.getActiveTerminalView();
+          if (terminalView) {
+            if (!checking) run(terminalView);
+            return true;
           }
-          return true;
-        }
-        return false;
-      }
-    });
+          return false;
+        },
+      });
+    };
 
-    // Split vertically
-    this.addCommand({
-      id: 'terminal-split-vertical',
-      name: t('commands.terminalSplitVertical'),
-      checkCallback: (checking: boolean) => {
-        if (!this.featureVisibilityManager.isVisibleAt('terminal', 'showInCommandPalette')) {
-          return false;
-        }
-        const terminalView = this.getActiveTerminalView();
-        if (terminalView) {
-          if (!checking) {
-            void terminalView.splitTerminal('vertical');
-          }
-          return true;
-        }
-        return false;
-      }
-    });
+    addTabCommand('terminal-tab-new', '新建终端标签', [{ modifiers: ['Alt'], key: 't' }], (v) => v.openNewTab());
+    addTabCommand('terminal-tab-close', '关闭当前标签', [{ modifiers: ['Alt'], key: 'w' }], (v) => v.closeActiveTab());
+    addTabCommand('terminal-tab-next', '下一个标签', [{ modifiers: ['Alt'], key: 'Tab' }], (v) => v.nextTab());
+    addTabCommand('terminal-tab-prev', '上一个标签', [{ modifiers: ['Alt', 'Shift'], key: 'Tab' }], (v) => v.prevTab());
+    for (let i = 1; i <= 9; i++) {
+      addTabCommand(`terminal-tab-${i}`, `跳到第 ${i} 个标签`, [{ modifiers: ['Alt'], key: String(i) }], (v) => v.gotoTab(i - 1));
+    }
+    addTabCommand('terminal-tab-10', '跳到第 10 个标签', [{ modifiers: ['Alt'], key: '0' }], (v) => v.gotoTab(9));
 
     // Clear buffer
     this.addCommand({

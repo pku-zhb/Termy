@@ -2242,3 +2242,98 @@
 .preset-script-row .preset-scripts-menu-status-badge {
   margin-left: 8px;
 }
+
+/* ===================== Termy Dev: 单 view 内多终端 tab ===================== */
+.termy-tab-bar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: 0 0 auto;
+  padding: 4px 6px;
+  overflow-x: auto;
+  background-color: var(--background-secondary);
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+.termy-tab-bar::-webkit-scrollbar {
+  height: 0;
+}
+
+.termy-tab {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 180px;
+  padding: 3px 8px;
+  border-radius: var(--radius-s);
+  font-size: var(--font-ui-smaller);
+  line-height: 1.2;
+  color: var(--text-muted);
+  background-color: transparent;
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+.termy-tab:hover {
+  background-color: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+.termy-tab.is-active {
+  background-color: var(--background-primary);
+  color: var(--text-normal);
+  font-weight: var(--font-semibold);
+}
+.termy-tab-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.termy-tab-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: var(--radius-s);
+  opacity: 0.55;
+}
+.termy-tab-close:hover {
+  opacity: 1;
+  background-color: var(--background-modifier-hover);
+}
+.termy-tab-close svg {
+  width: 12px;
+  height: 12px;
+}
+
+.termy-tab-add {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  margin-left: 2px;
+  border-radius: var(--radius-s);
+  color: var(--text-muted);
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+.termy-tab-add:hover {
+  background-color: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+.termy-tab-add svg {
+  width: 14px;
+  height: 14px;
+}
+
+/* 终端 pane：只显示 active，其余隐藏但保留状态/滚动 */
+.termy-pane {
+  display: none;
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  position: relative;
+}
+.termy-pane.is-active {
+  display: flex;
+  flex-direction: column;
+}

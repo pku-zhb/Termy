@@ -1488,7 +1488,7 @@ export class TerminalSettingsRenderer extends BaseSettingsRenderer {
   }
 
   private requestThemeRefresh(): void {
-    const leaves = this.context.app.workspace.getLeavesOfType('terminal-view');
+    const leaves = this.context.app.workspace.getLeavesOfType('terminal-view-dev');
     leaves.forEach(leaf => {
       const view = asTerminalViewLike(leaf.view);
       view?.refreshAppearance?.();
@@ -1496,7 +1496,7 @@ export class TerminalSettingsRenderer extends BaseSettingsRenderer {
   }
 
   private applyScrollbackToOpenTerminals(scrollback: number): void {
-    const leaves = this.context.app.workspace.getLeavesOfType('terminal-view');
+    const leaves = this.context.app.workspace.getLeavesOfType('terminal-view-dev');
     leaves.forEach(leaf => {
       const view = asTerminalViewLike(leaf.view);
       view?.getTerminalInstance?.()?.updateOptions({ scrollback });
@@ -1573,7 +1573,7 @@ export class TerminalSettingsRenderer extends BaseSettingsRenderer {
    * before xterm finishes loading the new renderer).
    */
   private subscribeToRendererChanges(): void {
-    const leaves = this.context.app.workspace.getLeavesOfType('terminal-view');
+    const leaves = this.context.app.workspace.getLeavesOfType('terminal-view-dev');
     for (const leaf of leaves) {
       const view = asTerminalViewLike(leaf.view);
       const instance = view?.getTerminalInstance?.() ?? null;
@@ -1594,7 +1594,7 @@ export class TerminalSettingsRenderer extends BaseSettingsRenderer {
     if (!this.rendererStatusEl) return;
 
     let actualRenderer: 'canvas' | 'webgl' | null = null;
-    const leaves = this.context.app.workspace.getLeavesOfType('terminal-view');
+    const leaves = this.context.app.workspace.getLeavesOfType('terminal-view-dev');
     for (const leaf of leaves) {
       const view = asTerminalViewLike(leaf.view);
       const instance = view?.getTerminalInstance?.() ?? null;

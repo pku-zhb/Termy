@@ -153,6 +153,13 @@ interface TerminalCommandMarker {
   exitCode: number | null;
 }
 
+export type TermyTabNavAction =
+  | { type: 'new' }
+  | { type: 'close' }
+  | { type: 'next' }
+  | { type: 'prev' }
+  | { type: 'goto'; index: number };
+
 export class TerminalInstance {
   readonly id: string;
   readonly shellType: string;
@@ -691,6 +698,17 @@ export class TerminalInstance {
     });
 
     this.xterm.attachCustomKeyEventHandler((event: KeyboardEvent) => {
+      // Termy Dev: Opt 系 tab 导航键 —— 用物理键码识别（规避 mac Alt 特殊字符），
+      // 直接驱动 tab 操作并阻止冒泡，不交给终端 shell
+      const navAction = this.matchTabNavKey(event);
+      if (navAction) {
+        if (event.type === 'keydown') {
+          event.preventDefault();
+          event.stopPropagation();
+          this.tabNavCallback?.(navAction);
+        }
+        return false;
+      }
       return keyboardProtocol.handleKeyboardEvent(event);
     });
   }
@@ -1806,6 +1824,31 @@ export class TerminalInstance {
    */
   setOnSplitTerminal(callback: (direction: 'horizontal' | 'vertical') => void): void {
     this.contextMenuCallbacks.onSplitTerminal = callback;
+  }
+
+  private tabNavCallback: ((action: TermyTabNavAction) => void) | null = null;
+
+  setTabNavCallback(callback: ((action: TermyTabNavAction) => void) | null): void {
+    this.tabNavCallback = callback;
+  }
+
+  /**
+   * 识别 Opt 系 tab 导航键（用 event.code 物理键码，规避 mac 上 Alt+字母产生特殊字符的问题）
+   */
+  private matchTabNavKey(event: KeyboardEvent): TermyTabNavAction | null {
+    if (!event.altKey || event.ctrlKey || event.metaKey) return null;
+    const code = event.code;
+    if (code === 'Tab') return event.shiftKey ? { type: 'prev' } : { type: 'next' };
+    if (event.shiftKey) return null;
+    if (code === 'KeyT') return { type: 'new' };
+    if (code === 'KeyW') return { type: 'close' };
+    const digit = /^Digit([0-9])$/.exec(code);
+    if (digit) {
+      const d = parseInt(digit[1], 10);
+      // 1~9 → 第 1~9 个；0 → 第 10 个
+      return { type: 'goto', index: d === 0 ? 9 : d - 1 };
+    }
+    return null;
   }
 
   setOnToggleAlwaysOnTop(callback: () => void, getLabel: () => string): void {

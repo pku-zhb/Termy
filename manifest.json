@@ -1,9 +1,9 @@
 {
-  "id": "termy",
-  "name": "Termy",
+  "id": "termy-dev",
+  "name": "Termy Dev",
   "version": "1.4.1",
   "minAppVersion": "1.8.7",
-  "description": "Terminal emulator with split panes, reusable workflows, AI CLI context handoff, and zero setup. Powered by xterm.js and a bundled Rust PTY backend.",
+  "description": "魔改版 Termy：单标签内多终端 + 内部 tab 切换（Opt 快捷键）。基于 ZyphrZero/Termy 的 fork，与原版共存。",
   "author": "ZyphrZero",
   "authorUrl": "https://github.com/ZyphrZero",
   "isDesktopOnly": true

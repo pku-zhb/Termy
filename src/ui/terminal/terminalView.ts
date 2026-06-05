@@ -46,7 +46,7 @@ import { t } from '../../i18n';
 import { RenameTerminalModal } from './renameTerminalModal';
 type XtermTerminal = import('@xterm/xterm').Terminal;
 
-export const TERMINAL_VIEW_TYPE = 'terminal-view';
+export const TERMINAL_VIEW_TYPE = 'terminal-view-dev';
 
 export type TerminalAttachOptions = {
   focus?: boolean;
@@ -57,7 +57,10 @@ export type TerminalAttachOptions = {
  */
 export class TerminalView extends ItemView {
   protected terminalService: TerminalService | null;
-  private terminalInstance: TerminalInstance | null = null;
+  private terminalInstance: TerminalInstance | null = null;  // 始终指向当前 active 终端
+  private tabs: Array<{ terminal: TerminalInstance; paneEl: HTMLElement }> = [];
+  private activeIndex = -1;
+  private tabBarEl: HTMLElement | null = null;
   private terminalContainer: HTMLElement | null = null;
   private dropHintEl: HTMLElement | null = null;
   private dragEnterDepth = 0;
@@ -142,10 +145,14 @@ export class TerminalView extends ItemView {
     container.empty();
     container.addClass('terminal-view-container');
 
+    // 内部 tab 栏（顶部），管理本 view 内的多个终端
+    this.tabBarEl = container.createDiv('termy-tab-bar');
+
     // Create the search bar container
     this.searchContainer = container.createDiv('terminal-search-container');
     this.createSearchUI();
 
+    // terminalContainer 作为多个终端 pane 的父容器
     this.terminalContainer = container.createDiv('terminal-container');
     this.ensureDropHint();
     this.hideDropHint();
@@ -154,8 +161,8 @@ export class TerminalView extends ItemView {
     }
 
     window.setTimeout(() => {
-      if (!this.terminalInstance && this.terminalContainer) {
-        void this.initializeTerminal();
+      if (this.tabs.length === 0 && this.terminalContainer) {
+        void this.addTab();
       }
     }, 0);
     return Promise.resolve();
@@ -270,14 +277,16 @@ export class TerminalView extends ItemView {
     this.dragEnterDepth = 0;
     this.dropHintEl = null;
 
-    if (this.terminalInstance) {
+    for (const tab of this.tabs) {
       try {
-        await this.terminalService?.destroyTerminal(this.terminalInstance.id);
+        await this.terminalService?.destroyTerminal(tab.terminal.id);
       } catch (error) {
         errorLog('[TerminalView] Destroy failed:', error);
       }
-      this.terminalInstance = null;
     }
+    this.tabs = [];
+    this.activeIndex = -1;
+    this.terminalInstance = null;
 
     this.containerEl.empty();
     this.disposeAppearanceStyle();
@@ -363,13 +372,154 @@ export class TerminalView extends ItemView {
    * Create a new terminal
    */
   private async createNewTerminal(): Promise<void> {
-    // Trigger the plugin's activateTerminalView method
-    // Get the plugin instance through the workspace
-    const plugin = this.getTerminalPlugin();
-    if (plugin) {
-      await plugin.activateTerminalView();
-    }
+    // 在当前 view 内新开一个 tab（不再开新的 Obsidian 标签）
+    await this.addTab();
   }
+
+  /**
+   * 在本 view 内新建一个终端 tab
+   */
+  async addTab(): Promise<void> {
+    if (!this.terminalService || !this.terminalContainer) return;
+
+    const paneEl = this.terminalContainer.createDiv('termy-pane');
+
+    let terminal: TerminalInstance;
+    try {
+      terminal = await this.terminalService.createTerminal();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      errorLog('[TerminalView] Create tab failed:', message);
+      new Notice(t('notices.terminal.initFailed', { message }));
+      paneEl.remove();
+      if (this.tabs.length === 0) {
+        this.leaf.detach();
+      }
+      return;
+    }
+
+    // 首个终端兑现 initPromise（waitForTerminalInstance 依赖）
+    this.initResolve?.(terminal);
+    this.initResolve = null;
+    this.initReject = null;
+
+    try {
+      terminal.attachToElement(paneEl);
+    } catch (error) {
+      errorLog('[TerminalView] Attach tab failed:', error);
+    }
+    this.registerTerminalHyperlinkHandler(terminal.getXterm());
+
+    this.tabs.push({ terminal, paneEl });
+    this.activeIndex = -1; // 强制 setActiveTab 重新绑定到新终端
+    this.setActiveTab(this.tabs.length - 1);
+  }
+
+  /**
+   * 切换到指定下标的 tab（显隐切换，保留各终端的状态与滚动）
+   */
+  setActiveTab(index: number): void {
+    if (index < 0 || index >= this.tabs.length) return;
+    if (index === this.activeIndex) {
+      this.tabs[index].terminal.focus();
+      return;
+    }
+
+    this.detachTerminalBindings();
+    this.activeIndex = index;
+
+    this.tabs.forEach((tab, i) => {
+      tab.paneEl.toggleClass('is-active', i === index);
+    });
+
+    const terminal = this.tabs[index].terminal;
+    this.terminalInstance = terminal;
+    this.bindTerminalInstance(terminal);
+    this.updateAppearanceStyles();
+    this.setupResizeObserver();
+
+    window.setTimeout(() => {
+      if (terminal.isAlive()) {
+        terminal.fit();
+        terminal.focus();
+      }
+    }, 0);
+
+    this.renderTabBar();
+    this.updateLeafHeader(this.leaf);
+    this.updateDropHintText();
+  }
+
+  /**
+   * 关闭指定 tab；关闭最后一个时连同关闭整个 view
+   */
+  async closeTab(index: number): Promise<void> {
+    const tab = this.tabs[index];
+    if (!tab) return;
+
+    try {
+      await this.terminalService?.destroyTerminal(tab.terminal.id);
+    } catch (error) {
+      errorLog('[TerminalView] Destroy tab failed:', error);
+    }
+    tab.paneEl.remove();
+    this.tabs.splice(index, 1);
+
+    if (this.tabs.length === 0) {
+      this.terminalInstance = null;
+      this.activeIndex = -1;
+      this.leaf.detach();
+      return;
+    }
+
+    // 重新计算 active 下标
+    let next = this.activeIndex;
+    if (index < this.activeIndex) {
+      next = this.activeIndex - 1;
+    } else if (index === this.activeIndex) {
+      next = Math.min(index, this.tabs.length - 1);
+    }
+    this.activeIndex = -1; // 强制重新绑定
+    this.setActiveTab(Math.max(0, next));
+  }
+
+  /**
+   * 渲染顶部 tab 栏
+   */
+  private renderTabBar(): void {
+    const bar = this.tabBarEl;
+    if (!bar) return;
+    bar.empty();
+    bar.toggleClass('is-single', this.tabs.length <= 1);
+
+    this.tabs.forEach((tab, i) => {
+      const tabEl = bar.createDiv('termy-tab');
+      tabEl.toggleClass('is-active', i === this.activeIndex);
+
+      const label = tabEl.createSpan('termy-tab-label');
+      label.setText(tab.terminal.getTitle() || t('terminal.defaultTitle'));
+      label.addEventListener('click', () => this.setActiveTab(i));
+
+      const closeBtn = tabEl.createSpan('termy-tab-close');
+      setIcon(closeBtn, 'x');
+      closeBtn.addEventListener('click', (event) => {
+        event.stopPropagation();
+        void this.closeTab(i);
+      });
+    });
+
+    const addBtn = bar.createDiv('termy-tab-add');
+    setIcon(addBtn, 'plus');
+    addBtn.addEventListener('click', () => void this.addTab());
+  }
+
+  // —— 供命令调用的 tab 导航 ——
+  openNewTab(): void { void this.addTab(); }
+  closeActiveTab(): void { if (this.activeIndex >= 0) void this.closeTab(this.activeIndex); }
+  nextTab(): void { if (this.tabs.length > 1) this.setActiveTab((this.activeIndex + 1) % this.tabs.length); }
+  prevTab(): void { if (this.tabs.length > 1) this.setActiveTab((this.activeIndex - 1 + this.tabs.length) % this.tabs.length); }
+  gotoTab(n: number): void { if (n >= 0 && n < this.tabs.length) this.setActiveTab(n); }
+  getTabCount(): number { return this.tabs.length; }
 
   private bindTerminalInstance(terminal: TerminalInstance): void {
     this.detachTerminalBindings();
@@ -390,8 +540,14 @@ export class TerminalView extends ItemView {
       void this.createNewTerminal();
     });
 
-    terminal.setOnSplitTerminal((direction) => {
-      void this.splitTerminal(direction);
+    terminal.setTabNavCallback((action) => {
+      switch (action.type) {
+        case 'new': this.openNewTab(); break;
+        case 'close': this.closeActiveTab(); break;
+        case 'next': this.nextTab(); break;
+        case 'prev': this.prevTab(); break;
+        case 'goto': this.gotoTab(action.index); break;
+      }
     });
 
     terminal.setOnToggleAlwaysOnTop(
@@ -1085,19 +1241,15 @@ export class TerminalView extends ItemView {
   }
 
   private attachTerminalToContainer(options: TerminalAttachOptions = {}): void {
-    if (!this.terminalContainer || !this.terminalInstance) {
-      errorLog('[TerminalView] Render failed: missing container or instance');
+    // 多 tab 模型下：把 active 终端挂到它自己的 pane（不清空父容器，保留其它 pane）
+    const pane = this.tabs[this.activeIndex]?.paneEl;
+    if (!pane || !this.terminalInstance) {
+      errorLog('[TerminalView] Render failed: missing pane or instance');
       return;
     }
 
-    const bgLayer = this.terminalContainer.querySelector('.terminal-background-image');
-    const dropHint = this.dropHintEl;
-    this.terminalContainer.empty();
-    if (bgLayer) this.terminalContainer.appendChild(bgLayer);
-    if (dropHint) this.terminalContainer.appendChild(dropHint);
-
     try {
-      this.terminalInstance.attachToElement(this.terminalContainer);
+      this.terminalInstance.attachToElement(pane);
     } catch (error) {
       errorLog('[TerminalView] Attach failed:', error);
       new Notice(t('notices.terminal.renderFailed', { message: String(error) }));
@@ -1254,7 +1406,7 @@ export class TerminalView extends ItemView {
     const appWithPlugins = this.app as typeof this.app & {
       plugins?: { getPlugin?: (id: string) => unknown };
     };
-    const plugin = appWithPlugins.plugins?.getPlugin?.('termy');
+    const plugin = appWithPlugins.plugins?.getPlugin?.('termy-dev');
     if (!this.isTerminalPlugin(plugin)) return null;
     return plugin;
   }
