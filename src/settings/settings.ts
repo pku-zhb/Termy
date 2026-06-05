@@ -51,19 +51,6 @@ export interface TerminalSettings {
   // Startup directory settings
   autoEnterVaultDirectory: boolean; // Automatically enter the project directory when opening a terminal
 
-  // New instance behavior: replace tab, new tab, new window, horizontal/vertical split, or left/right tab or split
-  newInstanceBehavior: 'replaceTab' | 'newTab' | 'newLeftTab' | 'newLeftSplit' |
-    'newRightTab' | 'newRightSplit' | 'newHorizontalSplit' | 'newVerticalSplit' | 'newWindow';
-
-  // Create new instances near existing terminals
-  createInstanceNearExistingOnes: boolean;
-
-  // Focus new instances: whether to automatically switch to the tab when creating a new terminal
-  focusNewInstance: boolean;
-
-  // Lock new instances: whether newly created terminal tabs are locked by default
-  lockNewInstance: boolean;
-
   // Terminal appearance settings
   fontSize: number;
   fontFamily: string;
@@ -330,10 +317,6 @@ export const DEFAULT_TERMINAL_SETTINGS: TerminalSettings = {
   platformCustomShellPaths: { ...DEFAULT_PLATFORM_CUSTOM_SHELL_PATHS },
   shellArgs: [],
   autoEnterVaultDirectory: true,
-  newInstanceBehavior: 'newHorizontalSplit',
-  createInstanceNearExistingOnes: true,
-  focusNewInstance: true,
-  lockNewInstance: false,
   fontSize: 14,
   fontFamily: 'Consolas, "Courier New", monospace',
   cursorStyle: 'block',

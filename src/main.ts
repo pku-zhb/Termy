@@ -26,7 +26,6 @@ import {
   getAlwaysOnTopTerminalLabelKey,
   getAlwaysOnTopTerminalMenuState,
 } from './services/terminal/alwaysOnTopTerminalDisplay';
-import { getLeafForTerminalRoute } from './services/terminal/terminalLeafRouting';
 import {
   AI_LAUNCHER_CATALOG,
   getAiLauncherEntry,
@@ -581,23 +580,23 @@ export default class TerminalPlugin extends Plugin {
    */
   async activateTerminalView(targetLeaf?: WorkspaceLeaf): Promise<void> {
     const { workspace } = this.app;
-    
-    const leaf = targetLeaf ?? this.getLeafForNewTerminal();
 
-    // If locking new instances is enabled, pin the tab
-    if (this.settings.lockNewInstance) {
-      leaf.setPinned(true);
+    // 复用已存在的单一 Termy 终端 view（单标签管理多终端）；不存在才新建
+    if (!targetLeaf) {
+      const existing = workspace.getLeavesOfType(TERMINAL_VIEW_TYPE);
+      if (existing.length > 0) {
+        workspace.revealLeaf(existing[0]);
+        workspace.setActiveLeaf(existing[0], { focus: true });
+        return;
+      }
     }
 
+    const leaf = targetLeaf ?? this.getLeafForNewTerminal();
     await leaf.setViewState({
       type: TERMINAL_VIEW_TYPE,
-      active: this.settings.focusNewInstance,
+      active: true,
     });
-
-    // If focusing new instances is enabled, switch to the new tab
-    if (this.settings.focusNewInstance) {
-      workspace.setActiveLeaf(leaf, { focus: true });
-    }
+    workspace.setActiveLeaf(leaf, { focus: true });
   }
 
   async toggleAlwaysOnTopTerminal(terminalView?: TerminalView | null): Promise<void> {
@@ -1519,10 +1518,7 @@ export default class TerminalPlugin extends Plugin {
    * Get the leaf to use for a new terminal
    */
   private getLeafForNewTerminal(): WorkspaceLeaf {
-    return getLeafForTerminalRoute(this.app.workspace, this.settings, {
-      terminalViewType: TERMINAL_VIEW_TYPE,
-      excludedLeaf: this._alwaysOnTopTerminalLeaf,
-    });
+    return this.app.workspace.getLeaf('tab');
   }
 
   private getPresetScriptById(scriptId: string): PresetScript | null {

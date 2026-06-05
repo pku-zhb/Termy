@@ -35,29 +35,13 @@ import {
 import { clearCommandVersionCache } from '../../services/terminal/commandVersionProbe';
 import { clamp, normalizeBackgroundPosition, normalizeBackgroundSize, toCssUrl } from '../../utils/styleUtils';
 
-const NEW_INSTANCE_BEHAVIORS = [
-  'replaceTab',
-  'newTab',
-  'newLeftTab',
-  'newLeftSplit',
-  'newRightTab',
-  'newRightSplit',
-  'newHorizontalSplit',
-  'newVerticalSplit',
-  'newWindow',
-] as const;
-
 const CURSOR_STYLES = ['block', 'underline', 'bar'] as const;
 const BACKGROUND_IMAGE_SIZES = ['cover', 'contain', 'auto'] as const;
 const PREFERRED_RENDERERS = ['canvas', 'webgl'] as const;
 
-type NewInstanceBehavior = (typeof NEW_INSTANCE_BEHAVIORS)[number];
 type CursorStyle = (typeof CURSOR_STYLES)[number];
 type BackgroundImageSize = (typeof BACKGROUND_IMAGE_SIZES)[number];
 type PreferredRenderer = (typeof PREFERRED_RENDERERS)[number];
-
-const isNewInstanceBehavior = (value: string): value is NewInstanceBehavior =>
-  NEW_INSTANCE_BEHAVIORS.includes(value as NewInstanceBehavior);
 
 const isCursorStyle = (value: string): value is CursorStyle =>
   CURSOR_STYLES.includes(value as CursorStyle);
@@ -220,7 +204,6 @@ export class TerminalSettingsRenderer extends BaseSettingsRenderer {
     this.renderShellSettings(containerEl);
 
     // Instance behavior settings card
-    this.renderInstanceBehaviorSettings(containerEl);
 
     // Preset scripts settings card
     this.renderPresetScriptsSettings(containerEl);
@@ -342,72 +325,6 @@ export class TerminalSettingsRenderer extends BaseSettingsRenderer {
       });
   }
 
-  /**
-   * Render instance behavior settings
-   */
-  private renderInstanceBehaviorSettings(containerEl: HTMLElement): void {
-    const instanceCard = containerEl.createDiv({ cls: 'settings-card' });
-
-    new Setting(instanceCard)
-      .setName(t('settingsDetails.terminal.instanceBehavior'))
-      .setHeading();
-
-    // New instance behavior
-    new Setting(instanceCard)
-      .setName(t('settingsDetails.terminal.newInstanceLayout'))
-      .setDesc(t('settingsDetails.terminal.newInstanceLayoutDesc'))
-      .addDropdown(dropdown => {
-        dropdown.addOption('replaceTab', t('layoutOptions.replaceTab'));
-        dropdown.addOption('newTab', t('layoutOptions.newTab'));
-        dropdown.addOption('newLeftTab', t('layoutOptions.newLeftTab'));
-        dropdown.addOption('newLeftSplit', t('layoutOptions.newLeftSplit'));
-        dropdown.addOption('newRightTab', t('layoutOptions.newRightTab'));
-        dropdown.addOption('newRightSplit', t('layoutOptions.newRightSplit'));
-        dropdown.addOption('newHorizontalSplit', t('layoutOptions.newHorizontalSplit'));
-        dropdown.addOption('newVerticalSplit', t('layoutOptions.newVerticalSplit'));
-        dropdown.addOption('newWindow', t('layoutOptions.newWindow'));
-
-        dropdown.setValue(this.context.plugin.settings.newInstanceBehavior);
-        dropdown.onChange((value) => {
-          if (!isNewInstanceBehavior(value)) return;
-          this.context.plugin.settings.newInstanceBehavior = value;
-          void this.saveSettings();
-        });
-      });
-
-    // Create near an existing terminal
-    new Setting(instanceCard)
-      .setName(t('settingsDetails.terminal.createNearExisting'))
-      .setDesc(t('settingsDetails.terminal.createNearExistingDesc'))
-      .addToggle(toggle => toggle
-        .setValue(this.context.plugin.settings.createInstanceNearExistingOnes)
-        .onChange((value) => {
-          this.context.plugin.settings.createInstanceNearExistingOnes = value;
-          void this.saveSettings();
-        }));
-
-    // Focus the new instance
-    new Setting(instanceCard)
-      .setName(t('settingsDetails.terminal.focusNewInstance'))
-      .setDesc(t('settingsDetails.terminal.focusNewInstanceDesc'))
-      .addToggle(toggle => toggle
-        .setValue(this.context.plugin.settings.focusNewInstance)
-        .onChange((value) => {
-          this.context.plugin.settings.focusNewInstance = value;
-          void this.saveSettings();
-        }));
-
-    // Lock the new instance
-    new Setting(instanceCard)
-      .setName(t('settingsDetails.terminal.lockNewInstance'))
-      .setDesc(t('settingsDetails.terminal.lockNewInstanceDesc'))
-      .addToggle(toggle => toggle
-        .setValue(this.context.plugin.settings.lockNewInstance)
-        .onChange((value) => {
-          this.context.plugin.settings.lockNewInstance = value;
-          void this.saveSettings();
-        }));
-  }
 
   /**
    * Render unified display settings (preview + theme/appearance tabs)
