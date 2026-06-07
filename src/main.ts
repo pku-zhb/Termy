@@ -274,9 +274,7 @@ export default class TerminalPlugin extends Plugin {
     return {
       ...DEFAULT_TERMINAL_SETTINGS.serverConnection,
       ...serverConnection,
-      binaryDownloadSource: serverConnection?.binaryDownloadSource === 'cloudflare-r2'
-        ? 'cloudflare-r2'
-        : 'github-release',
+      binaryDownloadSource: 'github-release',
       offlineMode: Boolean(serverConnection?.offlineMode),
     };
   }

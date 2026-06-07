@@ -20,7 +20,7 @@ test('resolveBinaryAssetUrls builds GitHub Release URLs for Unix binaries', () =
   );
 });
 
-test('resolveBinaryAssetUrls builds Cloudflare R2 URLs for Windows binaries', () => {
+test('resolveBinaryAssetUrls routes legacy Cloudflare R2 config to GitHub release URLs', () => {
   const urls = resolveBinaryAssetUrls({
     version: '1.3.0',
     platform: 'win32',
@@ -30,11 +30,11 @@ test('resolveBinaryAssetUrls builds Cloudflare R2 URLs for Windows binaries', ()
 
   assert.equal(
     urls.url,
-    'https://termy.changqiu.xyz/1.3.0/termy-server-win32-x64.exe'
+    'https://github.com/pku-zhb/Termy/releases/download/1.3.0/termy-server-win32-x64.exe'
   );
   assert.equal(
     urls.checksumUrl,
-    'https://termy.changqiu.xyz/1.3.0/termy-server-win32-x64.exe.sha256'
+    'https://github.com/pku-zhb/Termy/releases/download/1.3.0/termy-server-win32-x64.exe.sha256'
   );
 });
 

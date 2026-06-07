@@ -1519,10 +1519,6 @@ export class TerminalSettingsRenderer extends BaseSettingsRenderer {
           'github-release',
           t('settingsDetails.advanced.binaryDownloadSourceGithubRelease')
         );
-        dropdown.addOption(
-          'cloudflare-r2',
-          t('settingsDetails.advanced.binaryDownloadSourceCloudflareR2')
-        );
         dropdown
           .setValue(settings.serverConnection.binaryDownloadSource)
           .onChange((value) => {
