@@ -19,52 +19,8 @@ import { createTermyLogoSvg, createTermyLogoSvgMarkup, TERMY_RIBBON_ICON_ID } fr
 import { FeatureVisibilityManager } from './services/visibility';
 import { shell } from 'electron';
 import type { TerminalInstance } from './services/terminal/terminalInstance';
-import {
-  getAlwaysOnTopTerminalLabelKey,
-  getAlwaysOnTopTerminalMenuState,
-} from './services/terminal/alwaysOnTopTerminalDisplay';
-import {
-  AI_LAUNCHER_CATALOG,
-  getAiLauncherEntry,
-  getInstallCommandForPlatform,
-  getUpgradeCommandForPlatform,
-  partitionLaunchers,
-  type AiLauncherCategory,
-  type AiLauncherCatalogEntry,
-  type AiLauncherStatus,
-} from './services/terminal/aiLauncherCatalog';
-import {
-  detectCommandAvailability,
-  type CommandAvailability,
-} from './services/terminal/commandAvailability';
-import { clearCommandVersionCache, probeCommandVersion } from './services/terminal/commandVersionProbe';
-import { clearLatestVersionCache, fetchLatestVersion } from './services/terminal/latestVersionRegistry';
-import {
-  buildAiLauncherStatusSnapshot,
-  readinessToBadge,
-  type AiLauncherStatusSnapshot,
-} from './services/terminal/aiLauncherStatus';
-import { LauncherInstallModal } from './ui/terminal/launcherInstallModal';
 
 // Import terminal styles
-
-const ALWAYS_ON_TOP_TAB_BADGE_CLASS = 'termy-always-on-top-tab-badge';
-
-type ElectronBrowserWindowLike = {
-  setAlwaysOnTop: (flag: boolean, level?: string) => void;
-  isAlwaysOnTop?: () => boolean;
-  focus?: () => void;
-};
-
-type ElectronRuntime = {
-  remote?: {
-    getCurrentWindow?: () => ElectronBrowserWindowLike;
-  };
-};
-
-type ElectronRemoteRuntime = {
-  getCurrentWindow?: () => ElectronBrowserWindowLike;
-};
 
 /**
  * Main class for the Obsidian Terminal plugin
@@ -81,32 +37,11 @@ export default class TerminalPlugin extends Plugin {
   private _statusBarItem: HTMLElement | null = null;
   private _presetScriptsMenuEl: HTMLElement | null = null;
   private _presetScriptsMenuCleanup: (() => void) | null = null;
-
-  /**
-   * Snapshot of the most recent availability probe result, keyed by the
-   * detect command (e.g. `claude`, `codex`). The status bar menu reads it
-   * synchronously so the "hide unavailable launchers" setting can act on a
-   * known state. The map is refreshed by {@link refreshAiLauncherAvailability}.
-   */
-  private _aiLauncherAvailability: Map<string, CommandAvailability> = new Map();
-
-  /**
-   * Combined snapshot per launcher (presetId → snapshot). The snapshot
-   * carries the local version, the upstream "latest" version (when the
-   * user opted in via `checkAiLauncherUpdates`), and the derived readiness
-   * including the new `update-available` state. This is the single source
-   * of truth that both the menu and the install modal consume.
-   */
-  private _aiLauncherSnapshots: Map<string, AiLauncherStatusSnapshot> = new Map();
   /**
    * Listeners notified when a launcher snapshot is updated. The settings
    * page subscribes so its rows stay in sync when offline mode toggles
    * or the user opts in to update checks while the page is open.
    */
-  private _aiLauncherSnapshotListeners: Set<(presetId: string, snapshot: AiLauncherStatusSnapshot) => void> = new Set();
-  private _alwaysOnTopTerminalLeaf: WorkspaceLeaf | null = null;
-  private pendingRestoredTerminals: WeakMap<WorkspaceLeaf, TerminalInstance> = new WeakMap();
-
   // Registered preset script commands
   private registeredPresetScriptCommandIds: Set<string> = new Set();
 
@@ -220,12 +155,6 @@ export default class TerminalPlugin extends Plugin {
   private async handleUnload(): Promise<void> {
     debugLog(t('plugin.unloadingMessage'));
 
-    // Stop any in-flight launcher upgrade watchdogs so their poll
-    // timers do not outlive the plugin lifecycle.
-    for (const presetId of this._upgradeWatchdogTimers.keys()) {
-      this.stopUpgradeWatchdog(presetId);
-    }
-
     // Clean up the feature visibility manager
     if (this.featureVisibilityManager) {
       this.featureVisibilityManager.cleanup();
@@ -308,12 +237,12 @@ export default class TerminalPlugin extends Plugin {
   }
 
   private normalizePresetScripts(value: unknown): PresetScript[] {
-    // 魔改 fork：删除 AI 启动器后，过滤掉历史遗留的内置启动器脚本
-    const REMOVED_AI_LAUNCHER_IDS = new Set(['claude-code', 'codex', 'opencode']);
+    // Drop preset scripts from features that are no longer shipped.
+    const REMOVED_PRESET_SCRIPT_IDS = new Set(['claude-code', 'codex', 'opencode']);
     const scripts = (Array.isArray(value)
       ? value.map((script: PresetScript) => this.normalizePresetScript(script))
       : []
-    ).filter((script) => !REMOVED_AI_LAUNCHER_IDS.has(script.id));
+    ).filter((script) => !REMOVED_PRESET_SCRIPT_IDS.has(script.id));
     const existingIds = new Set(scripts.map((script) => script.id));
 
     // Seed missing built-in workflows. This happens on first install or if a
@@ -443,7 +372,7 @@ export default class TerminalPlugin extends Plugin {
     if (!targetLeaf) {
       const existing = workspace.getLeavesOfType(TERMINAL_VIEW_TYPE);
       if (existing.length > 0) {
-        workspace.revealLeaf(existing[0]);
+        void workspace.revealLeaf(existing[0]);
         workspace.setActiveLeaf(existing[0], { focus: true });
         return;
       }
@@ -457,364 +386,6 @@ export default class TerminalPlugin extends Plugin {
     workspace.setActiveLeaf(leaf, { focus: true });
   }
 
-  async toggleAlwaysOnTopTerminal(terminalView?: TerminalView | null): Promise<void> {
-    const existingView = this.getTrackedAlwaysOnTopTerminalView();
-    if (existingView) {
-      if (!terminalView || terminalView.leaf === existingView.leaf) {
-        await this.restoreAlwaysOnTopTerminalToMainWindow(existingView);
-        return;
-      }
-
-      await this.focusAlwaysOnTopTerminal(existingView);
-      return;
-    }
-
-    const sourceView = terminalView ?? this.getActiveTerminalView();
-    if (!sourceView) {
-      new Notice(t('notices.presetScript.terminalUnavailable'));
-      return;
-    }
-
-    const sourceTerminal = await sourceView.waitForTerminalInstance().catch(() => null);
-    if (!sourceTerminal) {
-      new Notice(t('terminal.notInitialized'));
-      return;
-    }
-
-    let targetWindow = sourceView.leaf.getContainer?.().win;
-    if (this.isLeafInMainWindow(sourceView.leaf)) {
-      try {
-        targetWindow = this.app.workspace.moveLeafToPopout(sourceView.leaf, {
-          size: {
-            width: 960,
-            height: 640,
-          },
-        }).win;
-      } catch (error) {
-        errorLog('[TerminalPlugin] Failed to move terminal to popout window:', error);
-        const message = error instanceof Error ? error.message : String(error);
-        new Notice(t('notices.terminal.alwaysOnTopOpenFailed', { message }), 5000);
-        return;
-      }
-    }
-
-    this._alwaysOnTopTerminalLeaf = sourceView.leaf;
-    this.updateAlwaysOnTopTabBadges();
-    await this.waitForTerminalWindowMigration(sourceView, targetWindow);
-    this.app.workspace.setActiveLeaf(sourceView.leaf, { focus: true });
-    targetWindow?.focus();
-    await this.applyAlwaysOnTopToLeaf(sourceView.leaf, targetWindow);
-    this.updateAlwaysOnTopTabBadges();
-    sourceTerminal.focus();
-  }
-
-  getAlwaysOnTopTerminalLabel(terminalView?: TerminalView | null): string {
-    const trackedView = this.getTrackedAlwaysOnTopTerminalView();
-    const state = getAlwaysOnTopTerminalMenuState(
-      !!trackedView,
-      !!terminalView && trackedView?.leaf === terminalView.leaf,
-    );
-    return t(getAlwaysOnTopTerminalLabelKey(state));
-  }
-
-  isAlwaysOnTopTerminal(terminalView?: TerminalView | null): boolean {
-    const trackedView = this.getTrackedAlwaysOnTopTerminalView();
-    return !!terminalView && trackedView?.leaf === terminalView.leaf;
-  }
-
-  handleTerminalViewClosed(terminalView: TerminalView): void {
-    if (this._alwaysOnTopTerminalLeaf === terminalView.leaf) {
-      this._alwaysOnTopTerminalLeaf = null;
-      this.updateAlwaysOnTopTabBadges();
-    }
-  }
-
-  private getTrackedAlwaysOnTopTerminalView(): TerminalView | null {
-    const leaf = this._alwaysOnTopTerminalLeaf;
-    if (leaf && this.isTerminalView(leaf.view)) {
-      return leaf.view;
-    }
-
-    this._alwaysOnTopTerminalLeaf = null;
-    this.updateAlwaysOnTopTabBadges();
-    return null;
-  }
-
-  private async focusAlwaysOnTopTerminal(terminalView: TerminalView): Promise<void> {
-    const targetWindow = terminalView.leaf.getContainer?.().win;
-    await this.waitForTerminalWindowMigration(terminalView, targetWindow);
-    this.app.workspace.setActiveLeaf(terminalView.leaf, { focus: true });
-    targetWindow?.focus();
-    await this.applyAlwaysOnTopToLeaf(terminalView.leaf, targetWindow);
-    this.updateAlwaysOnTopTabBadges();
-    terminalView.getTerminalInstance()?.focus();
-  }
-
-  private async restoreAlwaysOnTopTerminalToMainWindow(terminalView: TerminalView): Promise<void> {
-    const terminal = terminalView.releaseTerminalInstance();
-    if (!terminal) {
-      new Notice(t('terminal.notInitialized'));
-      return;
-    }
-
-    const sourceLeaf = terminalView.leaf;
-    const sourceWindow = sourceLeaf.getContainer?.().win;
-    const browserWindow = await this.waitForBrowserWindowForLeaf(sourceLeaf, sourceWindow, 500);
-    if (browserWindow?.isAlwaysOnTop?.()) {
-      this.setBrowserWindowAlwaysOnTop(browserWindow, false);
-    } else if (browserWindow) {
-      this.setBrowserWindowAlwaysOnTop(browserWindow, false);
-    }
-
-    this._alwaysOnTopTerminalLeaf = null;
-    this.updateAlwaysOnTopTabBadges();
-
-    const { workspace } = this.app;
-    const mainLeaf = this.getLeafForRestoredTerminal();
-    this.pendingRestoredTerminals.set(mainLeaf, terminal);
-    await mainLeaf.setViewState({
-      type: TERMINAL_VIEW_TYPE,
-      active: true,
-    });
-
-    const restoredView = await this.waitForTerminalViewInLeaf(mainLeaf);
-    if (!restoredView) {
-      errorLog('[TerminalPlugin] Failed to restore always-on-top terminal: target view did not load');
-      this.pendingRestoredTerminals.delete(mainLeaf);
-      await this.recoverReleasedTerminalInSourceView(terminalView, terminal, sourceWindow);
-      new Notice(t('notices.terminal.alwaysOnTopRestoreFailed'), 5000);
-      return;
-    }
-
-    this.pendingRestoredTerminals.delete(mainLeaf);
-    if (restoredView.getTerminalInstance() !== terminal) {
-      restoredView.adoptTerminalInstance(terminal);
-    }
-    workspace.setActiveLeaf(mainLeaf, { focus: true });
-    terminal.focus();
-    sourceLeaf.detach();
-  }
-
-  consumePendingRestoredTerminal(leaf: WorkspaceLeaf): TerminalInstance | null {
-    const terminal = this.pendingRestoredTerminals.get(leaf);
-    if (!terminal) {
-      return null;
-    }
-
-    this.pendingRestoredTerminals.delete(leaf);
-    return terminal;
-  }
-
-  private getLeafForRestoredTerminal(): WorkspaceLeaf {
-    const { workspace } = this.app;
-    const previousActiveLeaf = workspace.getMostRecentLeaf();
-    const rootLeaf = workspace.getMostRecentLeaf(workspace.rootSplit);
-    if (rootLeaf) {
-      workspace.setActiveLeaf(rootLeaf, { focus: false });
-    }
-    const leaf = workspace.getLeaf('tab');
-    if (previousActiveLeaf && previousActiveLeaf !== rootLeaf) {
-      workspace.setActiveLeaf(previousActiveLeaf, { focus: false });
-    }
-    return leaf;
-  }
-
-  private async waitForTerminalViewInLeaf(
-    leaf: WorkspaceLeaf,
-    timeoutMs = 2000,
-  ): Promise<TerminalView | null> {
-    const deadline = Date.now() + timeoutMs;
-    do {
-      if (this.isTerminalView(leaf.view)) {
-        await leaf.loadIfDeferred?.();
-        return leaf.view;
-      }
-      await this.delay(50);
-    } while (Date.now() < deadline);
-
-    return this.isTerminalView(leaf.view) ? leaf.view : null;
-  }
-
-  private async recoverReleasedTerminalInSourceView(
-    terminalView: TerminalView,
-    terminal: TerminalInstance,
-    sourceWindow?: Window,
-  ): Promise<void> {
-    terminalView.adoptTerminalInstance(terminal);
-    this._alwaysOnTopTerminalLeaf = terminalView.leaf;
-    this.updateAlwaysOnTopTabBadges();
-    await this.applyAlwaysOnTopToLeaf(terminalView.leaf, sourceWindow);
-    terminal.focus();
-  }
-
-  private updateAlwaysOnTopTabBadges(): void {
-    this.removeAlwaysOnTopTabBadges(activeDocument);
-    for (const leaf of this.app.workspace.getLeavesOfType(TERMINAL_VIEW_TYPE)) {
-      const leafDocument = leaf.view?.containerEl?.ownerDocument;
-      if (leafDocument && leafDocument !== activeDocument) {
-        this.removeAlwaysOnTopTabBadges(leafDocument);
-      }
-    }
-
-    const leaf = this._alwaysOnTopTerminalLeaf;
-    if (!leaf || !this.isTerminalView(leaf.view)) {
-      return;
-    }
-
-    const tabHeader = this.getLeafTabHeader(leaf);
-    if (!tabHeader) {
-      return;
-    }
-
-    const badge = tabHeader.ownerDocument.createElement('span');
-    badge.addClass(ALWAYS_ON_TOP_TAB_BADGE_CLASS);
-    badge.setAttribute('aria-label', t('terminal.contextMenu.alreadyPinnedToTop'));
-    badge.setAttribute('title', t('terminal.contextMenu.alreadyPinnedToTop'));
-    setIcon(badge, 'lock');
-
-    const titleEl = tabHeader.querySelector('.workspace-tab-header-inner-title');
-    if (titleEl) {
-      titleEl.insertAdjacentElement('afterend', badge);
-      return;
-    }
-
-    tabHeader.querySelector('.workspace-tab-header-inner')?.appendChild(badge);
-  }
-
-  private removeAlwaysOnTopTabBadges(targetDocument: Document): void {
-    targetDocument
-      .querySelectorAll(`.${ALWAYS_ON_TOP_TAB_BADGE_CLASS}`)
-      .forEach((badge) => badge.remove());
-  }
-
-  private getLeafTabHeader(leaf: WorkspaceLeaf): HTMLElement | null {
-    const leafWithTabHeader = leaf as WorkspaceLeaf & {
-      tabHeaderEl?: HTMLElement;
-      tabHeaderInnerTitleEl?: HTMLElement;
-    };
-    const tabHeader = leafWithTabHeader.tabHeaderEl
-      ?? leafWithTabHeader.tabHeaderInnerTitleEl?.closest<HTMLElement>('.workspace-tab-header')
-      ?? leaf.view?.containerEl?.closest<HTMLElement>('.workspace-leaf')?.querySelector<HTMLElement>('.workspace-tab-header');
-
-    return tabHeader ?? null;
-  }
-
-  private isLeafInMainWindow(leaf: WorkspaceLeaf): boolean {
-    const leafWindow = leaf.getContainer?.().win;
-    const mainWindow = this.app.workspace.rootSplit?.win;
-    return !leafWindow || !mainWindow || leafWindow === mainWindow;
-  }
-
-  private async waitForTerminalWindowMigration(terminalView: TerminalView, targetWindow?: Window): Promise<void> {
-    const deadline = Date.now() + 1500;
-    do {
-      terminalView.handleHostWindowChanged({ focus: false });
-      const leafWindow = terminalView.leaf.getContainer?.().win;
-      if (!targetWindow || leafWindow === targetWindow) {
-        break;
-      }
-      await this.delay(50);
-    } while (Date.now() < deadline);
-
-    await this.delay(100);
-    terminalView.handleHostWindowChanged({ focus: false });
-  }
-
-  private async applyAlwaysOnTopToLeaf(leaf: WorkspaceLeaf, targetWindow?: Window): Promise<void> {
-    const browserWindow = await this.waitForBrowserWindowForLeaf(leaf, targetWindow);
-    if (!browserWindow) {
-      new Notice(t('notices.terminal.alwaysOnTopUnavailable'), 5000);
-      return;
-    }
-
-    this.setBrowserWindowAlwaysOnTop(browserWindow, true);
-  }
-
-  private async waitForBrowserWindowForLeaf(
-    leaf: WorkspaceLeaf,
-    targetWindow?: Window,
-    timeoutMs = 2000,
-  ): Promise<ElectronBrowserWindowLike | null> {
-    const deadline = Date.now() + timeoutMs;
-    do {
-      const browserWindow = this.getBrowserWindowForLeaf(leaf, targetWindow);
-      if (browserWindow) {
-        return browserWindow;
-      }
-      await this.delay(50);
-    } while (Date.now() < deadline);
-
-    return null;
-  }
-
-  private getBrowserWindowForLeaf(leaf: WorkspaceLeaf, targetWindow?: Window): ElectronBrowserWindowLike | null {
-    const containerWindow = targetWindow ?? leaf.getContainer?.().win;
-    return this.getBrowserWindowForDomWindow(containerWindow ?? window);
-  }
-
-  private getBrowserWindowForDomWindow(targetWindow: Window | undefined): ElectronBrowserWindowLike | null {
-    if (!targetWindow) return null;
-
-    const targetRequire = this.getWindowRequire(targetWindow);
-    if (targetRequire) {
-      const browserWindow = this.getBrowserWindowFromRequire(targetRequire);
-      if (browserWindow) return browserWindow;
-    }
-
-    const currentRequire = this.getCurrentRequire();
-    if (targetWindow === window && currentRequire) {
-      return this.getBrowserWindowFromRequire(currentRequire);
-    }
-
-    return null;
-  }
-
-  private getWindowRequire(targetWindow: Window): NodeJS.Require | null {
-    const candidate = targetWindow as Window & { require?: NodeJS.Require };
-    return typeof candidate.require === 'function' ? candidate.require : null;
-  }
-
-  private getCurrentRequire(): NodeJS.Require | null {
-    try {
-      return require;
-    } catch {
-      return null;
-    }
-  }
-
-  private getBrowserWindowFromRequire(runtimeRequire: NodeJS.Require): ElectronBrowserWindowLike | null {
-    const electron = this.getElectronRuntime(runtimeRequire);
-    const browserWindow = electron.remote?.getCurrentWindow?.() ?? null;
-    if (browserWindow) return browserWindow;
-
-    const electronRemote = this.getElectronRemoteRuntime(runtimeRequire);
-    return electronRemote.getCurrentWindow?.() ?? null;
-  }
-
-  private getElectronRuntime(runtimeRequire: NodeJS.Require): ElectronRuntime {
-    try {
-      return runtimeRequire('electron') as ElectronRuntime;
-    } catch {
-      return {};
-    }
-  }
-
-  private getElectronRemoteRuntime(runtimeRequire: NodeJS.Require): ElectronRemoteRuntime {
-    try {
-      return runtimeRequire('@electron/remote') as ElectronRemoteRuntime;
-    } catch {
-      return {};
-    }
-  }
-
-  private setBrowserWindowAlwaysOnTop(browserWindow: ElectronBrowserWindowLike, enabled: boolean): void {
-    try {
-      browserWindow.setAlwaysOnTop(enabled, 'floating');
-    } catch (error) {
-      errorLog('[TerminalPlugin] Failed to set terminal window always-on-top:', error);
-      new Notice(t('notices.terminal.alwaysOnTopUnavailable'), 5000);
-    }
-  }
 
   private delay(ms: number): Promise<void> {
     return new Promise((resolve) => window.setTimeout(resolve, ms));
@@ -966,19 +537,16 @@ export default class TerminalPlugin extends Plugin {
       }
     });
 
-    // —— Termy Dev: 内部 tab 导航命令 ——
-    // 默认 Opt(Alt) 系快捷键；终端聚焦时实际由 xterm 层直接响应（见 terminalInstance.matchTabNavKey），
-    // 这里注册为正式 Obsidian 命令，便于在命令面板 / 快捷键设置中可见可改。
+    // Register internal tab navigation commands. Focused terminal key handling
+    // still happens in terminalInstance.matchTabNavKey.
     const addTabCommand = (
       id: string,
       name: string,
-      hotkeys: Array<{ modifiers: ('Mod' | 'Ctrl' | 'Meta' | 'Alt' | 'Shift')[]; key: string }>,
       run: (view: TerminalView) => void,
     ): void => {
       this.addCommand({
         id,
         name,
-        hotkeys,
         checkCallback: (checking: boolean) => {
           const terminalView = this.getActiveTerminalView();
           if (terminalView) {
@@ -990,15 +558,15 @@ export default class TerminalPlugin extends Plugin {
       });
     };
 
-    addTabCommand('terminal-tab-new', '新建终端标签', [{ modifiers: ['Alt'], key: 't' }], (v) => v.openNewTab());
-    addTabCommand('terminal-tab-close', '关闭当前标签', [{ modifiers: ['Alt'], key: 'w' }], (v) => v.closeActiveTab());
-    addTabCommand('terminal-tab-rename', '重命名当前标签', [{ modifiers: ['Alt'], key: 'r' }], (v) => v.renameActiveTab());
-    addTabCommand('terminal-tab-next', '下一个标签', [{ modifiers: ['Alt'], key: 'Tab' }], (v) => v.nextTab());
-    addTabCommand('terminal-tab-prev', '上一个标签', [{ modifiers: ['Alt', 'Shift'], key: 'Tab' }], (v) => v.prevTab());
+    addTabCommand('terminal-tab-new', '新建终端标签', (v) => v.openNewTab());
+    addTabCommand('terminal-tab-close', '关闭当前标签', (v) => v.closeActiveTab());
+    addTabCommand('terminal-tab-rename', '重命名当前标签', (v) => v.renameActiveTab());
+    addTabCommand('terminal-tab-next', '下一个标签', (v) => v.nextTab());
+    addTabCommand('terminal-tab-prev', '上一个标签', (v) => v.prevTab());
     for (let i = 1; i <= 9; i++) {
-      addTabCommand(`terminal-tab-${i}`, `跳到第 ${i} 个标签`, [{ modifiers: ['Alt'], key: String(i) }], (v) => v.gotoTab(i - 1));
+      addTabCommand(`terminal-tab-${i}`, `跳到第 ${i} 个标签`, (v) => v.gotoTab(i - 1));
     }
-    addTabCommand('terminal-tab-10', '跳到第 10 个标签', [{ modifiers: ['Alt'], key: '0' }], (v) => v.gotoTab(9));
+    addTabCommand('terminal-tab-10', '跳到第 10 个标签', (v) => v.gotoTab(9));
 
     // Clear buffer
     this.addCommand({
@@ -1090,7 +658,7 @@ export default class TerminalPlugin extends Plugin {
             return false;
           }
           if (!checking) {
-            this.runAiAwarePresetScript(currentScript);
+            this.runPresetScriptSafely(currentScript);
           }
           return true;
         }
@@ -1098,30 +666,7 @@ export default class TerminalPlugin extends Plugin {
     });
   }
 
-  /**
-   * Run a preset script, but route through the install modal when the entry
-   * is a catalog-backed AI launcher whose CLI is not installed. The status
-   * bar menu and the command palette share this path so behaviour stays
-   * consistent across surfaces.
-   */
-  private runAiAwarePresetScript(script: PresetScript): void {
-    const entry = getAiLauncherEntry(script.id);
-    if (entry && entry.detectCommand) {
-      const cached = this._aiLauncherSnapshots.get(entry.presetId);
-      if (cached?.readiness === 'not-installed') {
-        this.openLauncherInstallModal(script, entry, cached);
-        return;
-      }
-      if (cached?.readiness === 'update-available') {
-        const local = cached.local ?? '?';
-        const latest = cached.latest ?? '?';
-        new Notice(t('notices.presetScript.launcherUpdateAvailable', {
-          name: script.name || entry.presetId,
-          local,
-          latest,
-        }), 5000);
-      }
-    }
+  private runPresetScriptSafely(script: PresetScript): void {
     this.runPresetScript(script).catch((error) => {
       const message = error instanceof Error ? error.message : String(error);
       new Notice(t('notices.presetScript.runFailed', { message }));
@@ -1424,7 +969,6 @@ export default class TerminalPlugin extends Plugin {
     // Kick off a background availability refresh — the menu still renders
     // immediately using the most recent snapshot; the badges update in place
     // once new probe results arrive.
-    void this.refreshAiLauncherAvailability();
     const anchorRect = this._statusBarItem?.getBoundingClientRect();
     if (anchorRect) {
       this.showPresetScriptsMenuAtRect(anchorRect);
@@ -1496,73 +1040,33 @@ export default class TerminalPlugin extends Plugin {
   }
 
   private buildPresetScriptsMenu(): HTMLElement | null {
-    const scripts = (this.settings.presetScripts ?? []);
-    const visibleScripts = scripts.filter(script => script.showInStatusBar ?? true);
-    const hideUnavailable = this.settings.hideUnavailableAiLaunchers === true;
+    const scripts = (this.settings.presetScripts ?? [])
+      .filter(script => script.showInStatusBar !== false);
+    const activeDocument = this.app.workspace.containerEl.ownerDocument;
     const menu = activeDocument.createElement('div');
     menu.className = 'preset-scripts-menu';
     menu.setAttribute('role', 'menu');
 
     const listEl = activeDocument.createElement('div');
     listEl.className = 'preset-scripts-menu-list';
-    listEl.setAttribute('role', 'none');
 
-    // Partition the visible scripts into the AI launcher catalog buckets
-    // and the leftover "regular" workflows. The catalog buckets render
-    // grouped sections with readiness badges, while regular workflows
-    // keep their original drag-and-drop reorderable behavior.
-    const partition = partitionLaunchers(visibleScripts);
-
-    // Apply the user's "hide unavailable launchers" preference. We never
-    // hide a launcher whose status is still 'unknown' — the menu shows it
-    // as "Checking…" so the user still sees something during the very
-    // first probe.
-    const filterAvailable = (script: PresetScript): boolean => {
-      if (!hideUnavailable) return true;
-      const snapshot = this._aiLauncherSnapshots.get(script.id);
-      // We never hide a launcher whose status is still 'unknown' — the
-      // menu shows it as "Checking…" so the user still sees something.
-      return snapshot?.readiness !== 'not-installed';
-    };
-
-    const codingAgentScripts = partition.codingAgent.filter(filterAvailable);
-    const regularScripts = partition.regular;
-
-    const hasAnyContent =
-      codingAgentScripts.length > 0
-      || regularScripts.length > 0;
-
-    if (!hasAnyContent) {
+    if (scripts.length > 0) {
+      this.appendRegularPresetMenuItems(listEl, scripts);
+    } else {
       const empty = activeDocument.createElement('div');
       empty.className = 'preset-scripts-menu-item is-disabled';
       empty.textContent = t('settingsDetails.terminal.presetScriptsEmpty');
       listEl.appendChild(empty);
     }
 
-    // Coding agent section
-    if (codingAgentScripts.length > 0) {
-      this.appendPresetMenuCategoryHeader(listEl, 'coding-agent');
-      for (const script of codingAgentScripts) {
-        const entry = getAiLauncherEntry(script.id);
-        if (!entry) continue;
-        listEl.appendChild(this.createAiLauncherMenuItem(script, entry));
-      }
-    }
-
-    // Regular (non-AI) workflows keep the original drag-and-drop reorder UX.
-    if (regularScripts.length > 0) {
-      this.appendRegularPresetMenuItems(listEl, regularScripts);
-    }
-
     menu.appendChild(listEl);
 
     const footerEl = activeDocument.createElement('div');
     footerEl.className = 'preset-scripts-menu-footer';
-
-    const addItem = activeDocument.createElement('div');
+    const addItem = activeDocument.createElement('button');
+    addItem.type = 'button';
     addItem.className = 'preset-scripts-menu-item preset-scripts-menu-add';
-    addItem.setAttribute('role', 'menuitem');
-    addItem.textContent = `+ ${t('settingsDetails.terminal.presetScriptsAddMenu')}`;
+    addItem.textContent = t('settingsDetails.terminal.presetScriptsAdd');
     addItem.addEventListener('click', () => {
       this.closePresetScriptsMenu();
       this.openPresetScriptCreateModal();
@@ -1572,639 +1076,6 @@ export default class TerminalPlugin extends Plugin {
 
     return menu;
   }
-
-  /**
-   * Public hook used by the settings renderer when the user flips the
-   * "Check for AI launcher updates" toggle. Re-runs the snapshot pipeline
-   * so badges in the status bar menu reflect the new policy on the very
-   * next open without waiting for the user to click again.
-   *
-   * Pass `force: true` to drop the in-memory caches first. The toggle
-   * itself does not need this, but turning offline mode OFF does — any
-   * registry lookup we did while offline returned an error and got
-   * cached for 12 hours, so without a force-clear the badges would
-   * still show "no latest version known" until the TTL elapses.
-   */
-  async refreshAiLauncherStatusFromSettings(options: { force?: boolean } = {}): Promise<void> {
-    try {
-      if (options.force) {
-        clearLatestVersionCache();
-        for (const entry of AI_LAUNCHER_CATALOG) {
-          if (entry.detectCommand) {
-            clearCommandVersionCache(entry.detectCommand);
-          }
-        }
-      }
-      await this.refreshAiLauncherAvailability();
-    } catch (error) {
-      errorLog('[TerminalPlugin] Failed to refresh AI launcher status:', error);
-    }
-  }
-
-  /**
-   * Read the most recent cached snapshot for an AI launcher preset. Returns
-   * undefined when the preset is unknown or no probe has resolved yet.
-   * Exposed so the settings page can render the same readiness + version
-   * info that the status bar menu uses, without re-running its own probes.
-   */
-  getAiLauncherSnapshot(presetId: string): AiLauncherStatusSnapshot | undefined {
-    return this._aiLauncherSnapshots.get(presetId);
-  }
-
-  /**
-   * Subscribe to launcher snapshot updates. The listener fires every
-   * time {@link setAiLauncherSnapshot} writes a new snapshot — i.e.
-   * whenever any probe (PATH, version, registry) settles. Used by the
-   * settings page to keep its rows fresh when the user toggles offline
-   * mode or opts in to update checks while the page is open.
-   *
-   * Returns an unsubscribe function. Callers MUST call it when their
-   * DOM is torn down so we do not leak listeners across re-renders.
-   */
-  onAiLauncherSnapshotsChanged(
-    listener: (presetId: string, snapshot: AiLauncherStatusSnapshot) => void,
-  ): () => void {
-    this._aiLauncherSnapshotListeners.add(listener);
-    return () => {
-      this._aiLauncherSnapshotListeners.delete(listener);
-    };
-  }
-
-  /**
-   * Single write site for {@link _aiLauncherSnapshots}. Updates the map
-   * and fans the new value out to every registered listener so any open
-   * surface (settings page rows, in-flight menu render) can re-paint
-   * without polling.
-   */
-  private setAiLauncherSnapshot(presetId: string, snapshot: AiLauncherStatusSnapshot): void {
-    this._aiLauncherSnapshots.set(presetId, snapshot);
-    for (const listener of this._aiLauncherSnapshotListeners) {
-      try {
-        listener(presetId, snapshot);
-      } catch (error) {
-        errorLog('[TerminalPlugin] AI launcher snapshot listener threw:', error);
-      }
-    }
-  }
-
-  /**
-   * Re-run the probe pipeline for a single launcher and return the fresh
-   * snapshot. Public wrapper around {@link refreshSingleLauncherSnapshot}
-   * so the settings page can refresh one row in place after the cached
-   * snapshot is shown.
-   */
-  async refreshAiLauncherSnapshot(
-    entry: AiLauncherCatalogEntry,
-  ): Promise<AiLauncherStatusSnapshot | null> {
-    return this.refreshSingleLauncherSnapshot(entry);
-  }
-
-  /**
-   * Open the launcher install/upgrade modal for the given preset. Public
-   * entry point for the settings page so rows there can offer the same
-   * "Update now" affordance the status bar menu does.
-   *
-   * Returns false when the preset is not a catalogued AI launcher (or
-   * has no detect command) — callers should fall through to whatever
-   * default action makes sense for a regular workflow row.
-   */
-  openAiLauncherUpgradeModalForPreset(script: PresetScript): boolean {
-    const entry = getAiLauncherEntry(script.id);
-    if (!entry || !entry.detectCommand) return false;
-    const snapshot = this._aiLauncherSnapshots.get(entry.presetId) ?? null;
-    this.openLauncherInstallModal(script, entry, snapshot);
-    return true;
-  }
-
-  /**
-   * Refresh the AI launcher status snapshot in the background. The menu reads
-   * {@link _aiLauncherSnapshots} synchronously when rendering; this method
-   * keeps it warm so the very first menu open already has a meaningful
-   * answer for most launchers.
-   *
-   * Pipeline per launcher:
-   *   1. PATH probe (`where` / `which`) — always runs, zero network.
-   *   2. Local `--version` probe — always runs, zero network. Falls back to
-   *      well-known directories when PATH is sparse.
-   *   3. Remote latest-version lookup — only runs when the user enabled
-   *      `checkAiLauncherUpdates`. Off by default so the README's "no
-   *      extra outbound traffic" promise holds out of the box.
-   */
-  private async refreshAiLauncherAvailability(): Promise<void> {
-    const checkUpdates =
-      this.settings.checkAiLauncherUpdates === true
-      && this.settings.serverConnection?.offlineMode !== true;
-
-    const tasks = AI_LAUNCHER_CATALOG.map(async (entry) => {
-      if (!entry.detectCommand) {
-        return;
-      }
-      const command = entry.detectCommand;
-      const [pathAvailable, localVersion] = await Promise.all([
-        detectCommandAvailability(command).catch((): CommandAvailability => 'unknown'),
-        probeCommandVersion(command).catch(() => ({
-          version: null,
-          resolvedFrom: null,
-          rawOutput: null,
-        })),
-      ]);
-
-      this._aiLauncherAvailability.set(command, pathAvailable);
-
-      let latest: { version: string | null; error?: string } | null = null;
-      if (checkUpdates && entry.versionRegistry) {
-        try {
-          latest = await fetchLatestVersion(entry.versionRegistry);
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          latest = { version: null, error: message };
-        }
-      }
-
-      const snapshot = buildAiLauncherStatusSnapshot({
-        pathAvailable,
-        local: { version: localVersion.version, resolvedFrom: localVersion.resolvedFrom },
-        latest,
-      });
-      this.setAiLauncherSnapshot(entry.presetId, snapshot);
-    });
-
-    await Promise.all(tasks);
-  }
-
-  /**
-   * Render a section header inside the preset scripts menu. Used to label
-   * the "Coding agent" bucket.
-   */
-  private appendPresetMenuCategoryHeader(
-    listEl: HTMLElement,
-    category: AiLauncherCategory,
-  ): void {
-    const title = t('settingsDetails.terminal.aiLauncherCategoryCodingAgent');
-    const desc = t('settingsDetails.terminal.aiLauncherCategoryCodingAgentDesc');
-
-    const header = activeDocument.createElement('div');
-    header.className = 'preset-scripts-menu-section-header';
-    header.dataset.category = category;
-    header.setAttribute('role', 'presentation');
-
-    const titleEl = activeDocument.createElement('div');
-    titleEl.className = 'preset-scripts-menu-section-title';
-    titleEl.textContent = title;
-    header.appendChild(titleEl);
-
-    const descEl = activeDocument.createElement('div');
-    descEl.className = 'preset-scripts-menu-section-desc';
-    descEl.textContent = desc;
-    header.appendChild(descEl);
-
-    listEl.appendChild(header);
-  }
-
-  /**
-   * Build a menu row for a real catalog-backed AI launcher. The row shows a
-   * readiness badge ("Ready" / "Not installed") and routes the click to either
-   * the regular preset runner or the install-guidance modal.
-   */
-  private createAiLauncherMenuItem(
-    script: PresetScript,
-    entry: AiLauncherCatalogEntry,
-  ): HTMLElement {
-    const item = activeDocument.createElement('div');
-    item.className = 'preset-scripts-menu-item preset-scripts-menu-launcher';
-    item.setAttribute('role', 'menuitem');
-    item.dataset.scriptId = script.id;
-    item.dataset.launcherCategory = entry.category;
-
-    const iconEl = activeDocument.createElement('div');
-    iconEl.className = 'preset-scripts-menu-icon';
-    renderPresetScriptIcon(iconEl, script.icon || 'terminal');
-    item.appendChild(iconEl);
-
-    const labelEl = activeDocument.createElement('div');
-    labelEl.className = 'preset-scripts-menu-label';
-    labelEl.textContent = script.name || t('settingsDetails.terminal.presetScriptsUnnamed');
-    item.appendChild(labelEl);
-
-    // Pull the cached snapshot when available so re-opens don't flash
-    // through "Checking…" on every click.
-    const cachedSnapshot = this._aiLauncherSnapshots.get(entry.presetId);
-    const initialBadgeStatus: AiLauncherStatus = cachedSnapshot
-      ? readinessToBadge(cachedSnapshot.readiness)
-      : (entry.detectCommand ? 'checking' : 'ready');
-    const badge = this.createLauncherStatusBadge(initialBadgeStatus);
-    item.appendChild(badge);
-    if (cachedSnapshot) {
-      item.dataset.availability = cachedSnapshot.readiness;
-    }
-
-    // Version info stays in the tooltip only for this surface — the menu
-    // row is already crowded with icon + label + status badge, so the
-    // inline label lives on the settings page where there is more room.
-
-    setTooltip(item, this.buildLauncherTooltip(script, cachedSnapshot), {
-      placement: 'top',
-      classes: ['preset-script-tooltip'],
-    });
-
-    // Mutable holder so the click handler always sees the freshest
-    // snapshot, even after the async refresh below settles.
-    let snapshot = cachedSnapshot ?? null;
-
-    // Inline "Update" affordance shown only when an upgrade is available
-    // for this launcher AND the catalog defines an upgrade command for
-    // the current platform. Clicking it routes through the install
-    // modal so the user can review the exact command before running it.
-    const updateBtn = activeDocument.createElement('button');
-    updateBtn.className = 'preset-scripts-menu-action-btn preset-scripts-menu-action-update';
-    updateBtn.setAttribute('aria-label', t('settingsDetails.terminal.aiLauncherUpdateAriaLabel'));
-    setIcon(updateBtn, 'download');
-    updateBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      this.closePresetScriptsMenu();
-      const current = snapshot;
-      this.openLauncherInstallModal(script, entry, current);
-    });
-
-    const refreshUpdateBtnVisibility = (next: AiLauncherStatusSnapshot | null): void => {
-      const showUpdate =
-        next?.readiness === 'update-available'
-        && getUpgradeCommandForPlatform(entry) !== null;
-      updateBtn.classList.toggle('is-hidden', !showUpdate);
-    };
-    refreshUpdateBtnVisibility(cachedSnapshot ?? null);
-    item.appendChild(updateBtn);
-
-    // Refresh in the background so the badge & click route stay accurate
-    // when the user re-opens the menu after an install or upgrade. We do
-    // not block menu render on this — the cached snapshot is good enough.
-    if (entry.detectCommand) {
-      void this.refreshSingleLauncherSnapshot(entry).then((next) => {
-        if (!next) return;
-        snapshot = next;
-        this.applyLauncherBadgeStatus(badge, readinessToBadge(next.readiness));
-        item.dataset.availability = next.readiness;
-        refreshUpdateBtnVisibility(next);
-        setTooltip(item, this.buildLauncherTooltip(script, next), {
-          placement: 'top',
-          classes: ['preset-script-tooltip'],
-        });
-      });
-    }
-
-    item.addEventListener('click', () => {
-      this.closePresetScriptsMenu();
-
-      const current = snapshot;
-      if (current?.readiness === 'not-installed') {
-        this.openLauncherInstallModal(script, entry, current);
-        return;
-      }
-      if (current?.readiness === 'update-available') {
-        // The CLI is functional, so we still let the launcher run, but
-        // surface the upgrade path through a non-blocking notice. Users
-        // can disable this via the `checkAiLauncherUpdates` setting if
-        // they find it noisy.
-        const local = current.local ?? '?';
-        const latest = current.latest ?? '?';
-        new Notice(t('notices.presetScript.launcherUpdateAvailable', {
-          name: script.name || entry.presetId,
-          local,
-          latest,
-        }), 5000);
-      }
-
-      this.runPresetScript(script).catch((error) => {
-        const message = error instanceof Error ? error.message : String(error);
-        new Notice(t('notices.presetScript.runFailed', { message }));
-      });
-    });
-
-    return item;
-  }
-
-  /**
-   * Run all probes for one launcher (PATH + version + optional registry)
-   * and update the cached snapshot in place. Returns the new snapshot so
-   * callers can re-render without re-querying the Map.
-   */
-  private async refreshSingleLauncherSnapshot(
-    entry: AiLauncherCatalogEntry,
-  ): Promise<AiLauncherStatusSnapshot | null> {
-    if (!entry.detectCommand) return null;
-    const command = entry.detectCommand;
-    const checkUpdates =
-      this.settings.checkAiLauncherUpdates === true
-      && this.settings.serverConnection?.offlineMode !== true;
-
-    const [pathAvailable, localVersion] = await Promise.all([
-      detectCommandAvailability(command).catch((): CommandAvailability => 'unknown'),
-      probeCommandVersion(command).catch(() => ({
-        version: null,
-        resolvedFrom: null,
-        rawOutput: null,
-      })),
-    ]);
-    this._aiLauncherAvailability.set(command, pathAvailable);
-
-    let latest: { version: string | null; error?: string } | null = null;
-    if (checkUpdates && entry.versionRegistry) {
-      try {
-        latest = await fetchLatestVersion(entry.versionRegistry);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        latest = { version: null, error: message };
-      }
-    }
-
-    const snapshot = buildAiLauncherStatusSnapshot({
-      pathAvailable,
-      local: { version: localVersion.version, resolvedFrom: localVersion.resolvedFrom },
-      latest,
-    });
-    this.setAiLauncherSnapshot(entry.presetId, snapshot);
-    return snapshot;
-  }
-
-  /**
-   * Build the launcher row tooltip. Falls back to the existing workflow
-   * tooltip when no snapshot is available, so users never see less info
-   * than before this feature landed.
-   */
-  private buildLauncherTooltip(
-    script: PresetScript,
-    snapshot: AiLauncherStatusSnapshot | null | undefined,
-  ): string {
-    const base = this.buildPresetScriptTooltip(script);
-    if (!snapshot || (!snapshot.local && !snapshot.latest)) {
-      return base;
-    }
-    const lines: string[] = [];
-    if (snapshot.local) lines.push(t('settingsDetails.terminal.aiLauncherTooltipInstalled', { version: snapshot.local }));
-    if (snapshot.latest) lines.push(t('settingsDetails.terminal.aiLauncherTooltipLatest', { version: snapshot.latest }));
-    if (snapshot.resolvedFrom) lines.push(t('settingsDetails.terminal.aiLauncherTooltipResolvedFrom', { path: snapshot.resolvedFrom }));
-    return `${base}\n${lines.join('\n')}`;
-  }
-
-  /**
-   * Render the readiness badge for the Termy AI menu row. The badge starts
-   * from the cached resolver state and refreshes asynchronously.
-   */
-  private createLauncherStatusBadge(status: AiLauncherStatus): HTMLElement {
-    const badge = activeDocument.createElement('span');
-    badge.className = 'preset-scripts-menu-status-badge';
-    this.applyLauncherBadgeStatus(badge, status);
-    return badge;
-  }
-
-  private applyLauncherBadgeStatus(badge: HTMLElement, status: AiLauncherStatus): void {
-    badge.dataset.status = status;
-    badge.classList.remove(
-      'is-ready',
-      'is-not-installed',
-      'is-update-available',
-      'is-checking',
-    );
-    switch (status) {
-      case 'ready':
-        badge.classList.add('is-ready');
-        badge.textContent = t('settingsDetails.terminal.aiLauncherStatusReady');
-        break;
-      case 'not-installed':
-        badge.classList.add('is-not-installed');
-        badge.textContent = t('settingsDetails.terminal.aiLauncherStatusNotInstalled');
-        break;
-      case 'update-available':
-        badge.classList.add('is-update-available');
-        badge.textContent = t('settingsDetails.terminal.aiLauncherStatusUpdateAvailable');
-        break;
-      case 'checking':
-      default:
-        badge.classList.add('is-checking');
-        badge.textContent = t('settingsDetails.terminal.aiLauncherStatusChecking');
-        break;
-    }
-  }
-
-  private openLauncherInstallModal(
-    script: PresetScript,
-    entry: AiLauncherCatalogEntry,
-    snapshot: AiLauncherStatusSnapshot | CommandAvailability | null,
-  ): void {
-    const isSnapshot = (
-      value: AiLauncherStatusSnapshot | CommandAvailability | null,
-    ): value is AiLauncherStatusSnapshot => {
-      return !!value && typeof value === 'object' && 'readiness' in value;
-    };
-
-    const localVersion = isSnapshot(snapshot) ? snapshot.local : null;
-    const latestVersion = isSnapshot(snapshot) ? snapshot.latest : null;
-    const updateAvailable = isSnapshot(snapshot) && snapshot.readiness === 'update-available';
-    const upgradeCommand = updateAvailable ? getUpgradeCommandForPlatform(entry) : null;
-    const installCommand = getInstallCommandForPlatform(entry);
-
-    const modal = new LauncherInstallModal(this.app, {
-      name: script.name || t('settingsDetails.terminal.presetScriptsUnnamed'),
-      command: entry.detectCommand ?? '',
-      docsUrl: entry.installDocsUrl,
-      installCommand,
-      upgradeCommand,
-      localVersion,
-      latestVersion,
-      updateAvailable,
-      onRunAnyway: () => {
-        this.runPresetScript(script).catch((error) => {
-          const message = error instanceof Error ? error.message : String(error);
-          new Notice(t('notices.presetScript.runFailed', { message }));
-        });
-      },
-      // Wire up "Install now" only when we have an install command for
-      // the current platform AND the launcher is actually missing. We
-      // skip this hook in the update-available case so the modal's
-      // primary CTA stays focused on the upgrade.
-      onRunInstall:
-        !updateAvailable && installCommand
-          ? () => {
-              void this.runLauncherCommand(script, entry, installCommand, 'install');
-            }
-          : undefined,
-      onRunUpgrade: upgradeCommand
-        ? () => {
-            void this.runLauncherCommand(script, entry, upgradeCommand, 'upgrade');
-          }
-        : undefined,
-    });
-    modal.open();
-  }
-
-  /**
-   * Run a catalog-supplied install or upgrade command in a fresh Termy
-   * terminal. The user clicked "Install now" or "Update now" from the
-   * install modal, so we already have explicit consent to execute —
-   * Termy types the command into a new terminal session and presses
-   * Enter, exactly as if the user had typed it themselves.
-   *
-   * Because the command runs in a user-visible PTY we cannot wait on
-   * its exit code, so we kick off a short watchdog poll: re-probe the
-   * local version every few seconds and broadcast the new snapshot the
-   * moment the readiness changes. That way the settings page row, the
-   * status-bar menu badge, and the "Update now" / "Install now" button
-   * all flip back to "Ready" without the user having to reopen
-   * anything.
-   */
-  private async runLauncherCommand(
-    script: PresetScript,
-    entry: AiLauncherCatalogEntry,
-    command: string,
-    intent: 'install' | 'upgrade',
-  ): Promise<void> {
-    try {
-      await this.activateTerminalView(this.getLeafForNewTerminal());
-      const terminalView = this.getActiveTerminalView();
-      if (!terminalView) {
-        new Notice(t('notices.presetScript.terminalUnavailable'));
-        return;
-      }
-
-      const terminal = await terminalView.waitForTerminalInstance();
-      const title = intent === 'install'
-        ? t('settingsDetails.terminal.aiLauncherTitleInstall', { name: script.name || entry.presetId })
-        : t('settingsDetails.terminal.aiLauncherTitleUpdate', { name: script.name || entry.presetId });
-      terminal.setTitle(title);
-      this.updateLeafHeader(terminalView.leaf);
-
-      // Capture the version we'd consider "stale" — anything different
-      // from this signals the upgrade landed. Always null for install.
-      const before =
-        intent === 'upgrade'
-          ? this._aiLauncherSnapshots.get(entry.presetId)?.local ?? null
-          : null;
-
-      const normalized = this.normalizePresetScriptCommand(command);
-      terminal.write(normalized);
-      this.focusTerminalView(terminalView, terminal);
-
-      // Watchdog: poll the local probe (cheap — just spawns
-      // `<cmd> --version`) until the readiness flips or we hit the cap.
-      this.startUpgradeWatchdog(entry, before, intent);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      new Notice(t('notices.presetScript.runFailed', { message }));
-    }
-  }
-
-  /**
-   * Poll the local version probe after an upgrade command has been
-   * dispatched into a Termy terminal. Stops on:
-   *
-   *   - the snapshot leaves `update-available` (success — local caught
-   *     up with latest, or the user was already on latest before
-   *     clicking Update);
-   *   - {@link UPGRADE_WATCHDOG_TIMEOUT_MS} elapses (give-up — upgrade
-   *     never finished, network dropped, user cancelled the install);
-   *   - the user dispatches another upgrade for the same launcher (the
-   *     new watchdog supersedes this one).
-   *
-   * Cadence: a single 5-second tick. Frequent enough that a successful
-   * upgrade flips the UI within a few seconds of finishing, but cheap
-   * enough that a stuck/cancelled upgrade only spawns ~24 probes
-   * before the timeout cuts it off.
-   */
-  private _upgradeWatchdogTimers: Map<string, number> = new Map();
-
-  private startUpgradeWatchdog(
-    entry: AiLauncherCatalogEntry,
-    versionBeforeUpgrade: string | null,
-    intent: 'install' | 'upgrade' = 'upgrade',
-  ): void {
-    if (!entry.detectCommand) return;
-    const command = entry.detectCommand;
-
-    // If a previous watchdog is already running for this launcher,
-    // cancel it. The most recent click wins.
-    this.stopUpgradeWatchdog(entry.presetId);
-
-    const POLL_INTERVAL_MS = 5_000;
-    const TIMEOUT_MS = 2 * 60 * 1000;
-    const startedAt = Date.now();
-
-    const scheduleNextTick = (): void => {
-      // Stopped? Some other code path tore us down — bail.
-      if (!this._upgradeWatchdogTimers.has(entry.presetId)) return;
-
-      if (Date.now() - startedAt >= TIMEOUT_MS) {
-        this.stopUpgradeWatchdog(entry.presetId);
-        return;
-      }
-      const timer = window.setTimeout(tick, POLL_INTERVAL_MS);
-      this._upgradeWatchdogTimers.set(entry.presetId, timer);
-    };
-
-    const tick = (): void => {
-      // Always drop the local probe + registry caches so the resolver
-      // re-queries instead of returning the pre-upgrade values.
-      clearCommandVersionCache(command);
-      clearLatestVersionCache();
-
-      void this.refreshSingleLauncherSnapshot(entry).then((snapshot) => {
-        if (!snapshot) {
-          // Probe failed — treat as a transient and retry on schedule.
-          scheduleNextTick();
-          return;
-        }
-        // Success criteria: the launcher is no longer flagged as
-        // update-available. This covers both "upgrade landed" and "the
-        // user was already on the latest version when they clicked
-        // Update" (e.g. they wanted to test the flow). For the latter
-        // we still log a friendly notice so the click feels acknowledged.
-        if (snapshot.readiness !== 'update-available') {
-          this.stopUpgradeWatchdog(entry.presetId);
-          if (intent === 'install') {
-            if (snapshot.local) {
-              new Notice(t('notices.presetScript.launcherInstalled', {
-                name: entry.presetId,
-                version: snapshot.local,
-              }));
-            }
-          } else if (snapshot.local && snapshot.local !== versionBeforeUpgrade) {
-            new Notice(t('notices.presetScript.launcherUpdated', {
-              name: entry.presetId,
-              version: snapshot.local,
-            }));
-          } else if (snapshot.local) {
-            new Notice(t('notices.presetScript.launcherOnLatest', {
-              name: entry.presetId,
-              version: snapshot.local,
-            }));
-          }
-          return;
-        }
-        scheduleNextTick();
-      }).catch(() => {
-        scheduleNextTick();
-      });
-    };
-
-    // Seed the map so concurrent calls see we're running, then run an
-    // immediate tick — the badge flips to "Checking…" right away.
-    this._upgradeWatchdogTimers.set(entry.presetId, 0);
-    tick();
-  }
-
-  private stopUpgradeWatchdog(presetId: string): void {
-    const timer = this._upgradeWatchdogTimers.get(presetId);
-    if (timer === undefined) return;
-    if (timer !== 0) {
-      window.clearTimeout(timer);
-    }
-    this._upgradeWatchdogTimers.delete(presetId);
-  }
-
-  /**
-   * Render the legacy reorderable workflow rows. These are workflows that
-   * are NOT part of the AI launcher catalog (e.g. user-defined entries).
-   * The behavior is unchanged from before the catalog refactor.
-   */
   private appendRegularPresetMenuItems(
     listEl: HTMLElement,
     scripts: PresetScript[],
@@ -2541,8 +1412,6 @@ class TerminalViewPlaceholder extends TerminalView {
   async onOpen() {
     if (this.initialized || this.initializing) return;
     this.initializing = true;
-    const pendingTerminal = this.plugin.consumePendingRestoredTerminal(this.leaf);
-
     // Show the loading message
     this.contentEl.empty();
     this.contentEl.createEl('div', {
@@ -2559,9 +1428,6 @@ class TerminalViewPlaceholder extends TerminalView {
       // Clear the placeholder content and initialize the terminal view
       this.contentEl.empty();
       await super.onOpen();
-      if (pendingTerminal) {
-        this.adoptTerminalInstance(pendingTerminal);
-      }
       this.initialized = true;
     } catch (error) {
       errorLog('[TerminalViewPlaceholder] Failed to initialize:', error);

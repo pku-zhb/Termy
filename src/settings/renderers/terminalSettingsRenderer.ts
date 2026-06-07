@@ -21,18 +21,6 @@ import { t } from '../../i18n';
 import { PresetScriptModal } from '../../ui/terminal/presetScriptModal';
 import { renderPresetScriptIcon } from '../../ui/terminal/presetScriptIcons';
 import { getSelectableShellTypes } from '../../services/terminal/shellProfiles';
-import {
-  getAiLauncherEntry,
-  getUpgradeCommandForPlatform,
-  partitionLaunchers,
-  type AiLauncherCatalogEntry,
-  type AiLauncherCategory,
-} from '../../services/terminal/aiLauncherCatalog';
-import {
-  readinessToBadge,
-  type AiLauncherStatusSnapshot,
-} from '../../services/terminal/aiLauncherStatus';
-import { clearCommandVersionCache } from '../../services/terminal/commandVersionProbe';
 import { clamp, normalizeBackgroundPosition, normalizeBackgroundSize, toCssUrl } from '../../utils/styleUtils';
 
 const CURSOR_STYLES = ['block', 'underline', 'bar'] as const;
@@ -169,7 +157,6 @@ export class TerminalSettingsRenderer extends BaseSettingsRenderer {
    * The render() entry tears them down before rebuilding the DOM so we
    * never accumulate listeners across re-renders.
    */
-  private launcherSnapshotUnsubscribers: Array<() => void> = [];
   private readonly builtInPresetIds = new Set(['claude-code', 'codex', 'opencode']);
   /**
    * Refresh hook for the "AI launcher update check is suppressed by
@@ -177,15 +164,6 @@ export class TerminalSettingsRenderer extends BaseSettingsRenderer {
    * from the server-connection card whenever offline mode toggles.
    * Null between renders.
    */
-  private refreshAiLauncherUpdateHint: (() => void) | null = null;
-  /**
-   * Per-launcher "Update now" button registered by
-   * {@link bindLauncherUpdateButton}. The snapshot resolver toggles
-   * `.is-hidden` on the bound element when readiness flips between
-   * `update-available` and other states. Cleared on every `render()`
-   * so stale buttons from a previous DOM tree don't leak.
-   */
-  private launcherUpdateButtons: Map<string, HTMLElement> = new Map();
 
   /**
    * Render terminal settings
@@ -195,8 +173,6 @@ export class TerminalSettingsRenderer extends BaseSettingsRenderer {
     // Tear down any subscriptions from a previous render before rebuilding the DOM.
     this.disposeRendererChangeSubscriptions();
     this.disposeLauncherSnapshotSubscriptions();
-    this.refreshAiLauncherUpdateHint = null;
-    this.launcherUpdateButtons.clear();
     this.context = context;
     const containerEl = context.containerEl;
 
@@ -531,47 +507,19 @@ export class TerminalSettingsRenderer extends BaseSettingsRenderer {
     listEl.empty();
 
     const scripts = this.context.plugin.settings.presetScripts ?? [];
-
     if (scripts.length === 0) {
-      listEl.createDiv({
-        cls: 'preset-scripts-empty',
-        text: t('settingsDetails.terminal.presetScriptsEmpty')
-      });
+      const empty = listEl.createDiv({ cls: 'preset-scripts-empty' });
+      empty.textContent = t('settingsDetails.terminal.presetScriptsEmpty');
       return;
     }
 
-    // Partition entries into AI launcher buckets vs. user-defined workflows.
-    // Each bucket renders the same row layout but the AI buckets get a
-    // category header and a readiness badge so the settings UI mirrors the
-    // grouping used by the status bar menu.
-    const partition = partitionLaunchers(scripts);
-
-    const indexById = new Map(scripts.map((script, index) => [script.id, index]));
     const dragState: DragState = { row: null, index: null };
-
-    if (partition.codingAgent.length > 0) {
-      this.renderPresetScriptsCategoryHeader(listEl, 'coding-agent');
-      for (const script of partition.codingAgent) {
-        const index = indexById.get(script.id) ?? 0;
-        this.renderPresetScriptRow(listEl, script, index, dragState);
-      }
-    }
-
-    if (partition.regular.length > 0) {
-      if (partition.codingAgent.length > 0) {
-        this.renderPresetScriptsCategoryHeader(listEl, 'workflow');
-      }
-      for (const script of partition.regular) {
-        const index = indexById.get(script.id) ?? 0;
-        this.renderPresetScriptRow(listEl, script, index, dragState);
-      }
-    }
+    scripts.forEach((script, index) => {
+      this.renderPresetScriptRow(listEl, script, index, dragState);
+    });
   }
 
-  /**
-   * Render one preset script row. Shared between the AI launcher buckets
-   * and the regular workflow bucket so the visual layout stays consistent.
-   */
+
   private renderPresetScriptRow(
     listEl: HTMLElement,
     script: PresetScript,
@@ -584,7 +532,6 @@ export class TerminalSettingsRenderer extends BaseSettingsRenderer {
     row.dataset.index = String(index);
 
     const isBuiltIn = this.isBuiltInPresetScript(script);
-    const launcherEntry = getAiLauncherEntry(script.id);
 
     const dragHandle = row.createDiv({ cls: 'preset-script-drag-handle' });
     setIcon(dragHandle, 'grip-vertical');
@@ -610,44 +557,7 @@ export class TerminalSettingsRenderer extends BaseSettingsRenderer {
       cls: 'preset-script-name',
       text: script.name?.trim() || t('settingsDetails.terminal.presetScriptsUnnamed')
     });
-    if (launcherEntry?.detectCommand) {
-      const badge = nameRowEl.createDiv({
-        cls: 'preset-scripts-menu-status-badge is-checking',
-        text: t('settingsDetails.terminal.aiLauncherStatusChecking'),
-      });
-      const versionEl = nameRowEl.createDiv({
-        cls: 'preset-scripts-menu-version is-hidden',
-      });
-      this.attachLauncherSnapshotInfo(badge, versionEl, launcherEntry);
-    }
-    contentEl.createDiv({
-      cls: 'preset-script-command',
-      text: this.getPresetScriptCommandPreview(script)
-    });
-
     const actionsEl = row.createDiv({ cls: 'preset-script-actions' });
-
-    // "Update now" affordance for AI launcher rows. Hidden by default
-    // and revealed by the snapshot resolver below when the row's CLI
-    // has an update available AND the catalog defines an upgrade
-    // command for the current platform. Mirrors the same button in
-    // the status bar menu so both surfaces feel consistent.
-    if (launcherEntry?.detectCommand) {
-      const updateBtn = actionsEl.createEl('button', {
-        cls: 'clickable-icon preset-script-launcher-update is-hidden',
-      });
-      setIcon(updateBtn, 'download');
-      updateBtn.setAttribute('aria-label', t('settingsDetails.terminal.aiLauncherUpdateAriaLabel'));
-      updateBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        this.context.plugin.openAiLauncherUpgradeModalForPreset(script);
-      });
-      const badge = nameRowEl.querySelector<HTMLElement>('.preset-scripts-menu-status-badge');
-      if (badge) {
-        this.bindLauncherUpdateButton(launcherEntry, badge, updateBtn);
-      }
-    }
-
     const editBtn = actionsEl.createEl('button', { cls: 'clickable-icon' });
     setIcon(editBtn, 'pencil');
     editBtn.setAttribute('aria-label', t('modals.presetScript.titleEdit'));
@@ -753,182 +663,42 @@ export class TerminalSettingsRenderer extends BaseSettingsRenderer {
     });
   }
 
-  private renderPresetScriptsCategoryHeader(
-    listEl: HTMLElement,
-    category: AiLauncherCategory | 'workflow',
-  ): void {
-    let title: string;
-    let description: string;
-    if (category === 'coding-agent') {
-      title = t('settingsDetails.terminal.aiLauncherCategoryCodingAgent');
-      description = t('settingsDetails.terminal.aiLauncherCategoryCodingAgentDesc');
-    } else {
-      title = t('settingsDetails.terminal.aiLauncherCategoryWorkflow');
-      description = t('settingsDetails.terminal.aiLauncherCategoryWorkflowDesc');
-    }
-
-    const header = listEl.createDiv({ cls: 'preset-scripts-list-section-header' });
-    header.dataset.category = category;
-    header.createDiv({ cls: 'preset-scripts-list-section-title', text: title });
-    header.createDiv({ cls: 'preset-scripts-list-section-desc', text: description });
-  }
-
-  /**
-   * Probe the underlying CLI and update the badge in place. Mirrors the
-   * behaviour used by the status bar menu so users see the same readiness
-   * label and version info everywhere Termy lists their AI launchers.
-   *
-   * Reads the cached snapshot from the plugin first so the row paints
-   * synchronously when a probe has already resolved, then refreshes in
-   * the background to catch installs/upgrades made since the last open,
-   * and finally subscribes to the plugin's snapshot stream so subsequent
-   * refreshes (e.g. after the user toggles offline mode) propagate
-   * without requiring the settings page to be reopened.
-   */
-  private attachLauncherSnapshotInfo(
-    badge: HTMLElement,
-    versionEl: HTMLElement,
-    entry: AiLauncherCatalogEntry,
-  ): void {
-    const cached = this.context.plugin.getAiLauncherSnapshot(entry.presetId);
-    if (cached) {
-      this.applyLauncherSnapshotToRow(badge, versionEl, cached);
-    }
-
-    // Subscribe so future probe results (forced refresh after offline
-    // mode flips, registry revalidation, etc.) repaint this row in
-    // place. The unsubscribe is captured into the array tearDown
-    // walks at the next render().
-    const unsubscribe = this.context.plugin.onAiLauncherSnapshotsChanged(
-      (presetId, snapshot) => {
-        if (presetId !== entry.presetId) return;
-        this.applyLauncherSnapshotToRow(badge, versionEl, snapshot);
-      },
-    );
-    this.launcherSnapshotUnsubscribers.push(unsubscribe);
-
-    if (!entry.detectCommand) return;
-
-    // Force-refresh: clear the version probe cache so the settings page
-    // always shows the freshest local version. Without this, a stale
-    // null from a previous probe (e.g. Obsidian started before the CLI
-    // was installed) would persist for up to 60 seconds and the row
-    // would show no version even though the CLI is now on PATH.
-    clearCommandVersionCache(entry.detectCommand);
-    void this.context.plugin.refreshAiLauncherSnapshot(entry);
-  }
-
-  /**
-   * Apply a snapshot to the badge + version DOM pair created by
-   * {@link renderPresetScriptRow}. Centralised so the cached and the
-   * refreshed code paths render identically.
-   */
-  private applyLauncherSnapshotToRow(
-    badge: HTMLElement,
-    versionEl: HTMLElement,
-    snapshot: AiLauncherStatusSnapshot,
-  ): void {
-    const status = readinessToBadge(snapshot.readiness);
-    badge.classList.remove(
-      'is-checking',
-      'is-ready',
-      'is-not-installed',
-      'is-update-available',
-    );
-    switch (status) {
-      case 'ready':
-        badge.classList.add('is-ready');
-        badge.textContent = t('settingsDetails.terminal.aiLauncherStatusReady');
-        break;
-      case 'not-installed':
-        badge.classList.add('is-not-installed');
-        badge.textContent = t('settingsDetails.terminal.aiLauncherStatusNotInstalled');
-        break;
-      case 'update-available':
-        badge.classList.add('is-update-available');
-        badge.textContent = t('settingsDetails.terminal.aiLauncherStatusUpdateAvailable');
-        break;
-      case 'checking':
-      default:
-        badge.classList.add('is-checking');
-        badge.textContent = t('settingsDetails.terminal.aiLauncherStatusChecking');
-        break;
-    }
-
-    versionEl.classList.remove('is-update-available');
-    const local = snapshot.local;
-    if (!local) {
-      versionEl.textContent = '';
-      versionEl.classList.add('is-hidden');
-    } else {
-      versionEl.classList.remove('is-hidden');
-      if (snapshot.readiness === 'update-available' && snapshot.latest) {
-        versionEl.classList.add('is-update-available');
-        versionEl.textContent = `v${local} → v${snapshot.latest}`;
-      } else {
-        versionEl.textContent = `v${local}`;
-      }
-    }
-
-    // Keep the per-row "Update now" button in sync with the snapshot.
-    // Lookup by presetId — the catalog entry that drove this row owns
-    // the button, and renderPresetScriptRow registers it via
-    // bindLauncherUpdateButton before the resolver fires.
-    const presetId = badge.dataset.launcherPresetId;
-    if (presetId) {
-      this.refreshLauncherUpdateButtonVisibility(presetId, snapshot);
-    }
-  }
-
-  /**
-   * Register the per-row "Update now" button so the snapshot resolver
-   * can toggle its visibility when the readiness flips. Also tags the
-   * badge with the preset id so {@link applyLauncherSnapshotToRow} can
-   * find the right button without an extra parameter.
-   */
-  private bindLauncherUpdateButton(
-    entry: AiLauncherCatalogEntry,
-    badge: HTMLElement,
-    button: HTMLElement,
-  ): void {
-    badge.dataset.launcherPresetId = entry.presetId;
-    this.launcherUpdateButtons.set(entry.presetId, button);
-    // Apply the cached snapshot if one is already available so the
-    // button starts in the correct visible state without waiting for
-    // the async refresh.
-    const cached = this.context.plugin.getAiLauncherSnapshot(entry.presetId);
-    if (cached) {
-      this.refreshLauncherUpdateButtonVisibility(entry.presetId, cached);
-    }
-  }
-
-  private refreshLauncherUpdateButtonVisibility(
-    presetId: string,
-    snapshot: AiLauncherStatusSnapshot,
-  ): void {
-    const button = this.launcherUpdateButtons.get(presetId);
-    if (!button) return;
-    const entry = getAiLauncherEntry(presetId);
-    const showUpdate =
-      snapshot.readiness === 'update-available'
-      && entry !== undefined
-      && getUpgradeCommandForPlatform(entry) !== null;
-    button.classList.toggle('is-hidden', !showUpdate);
-  }
-
   private isBuiltInPresetScript(script: PresetScript): boolean {
     return this.builtInPresetIds.has(script.id);
   }
 
-  private openPresetScriptModal(script: PresetScript, isNew: boolean, listEl: HTMLElement): void {
-    const modal = new PresetScriptModal(this.context.app, script, (updatedScript) => {
-      const scripts = this.context.plugin.settings.presetScripts ?? [];
-      const index = scripts.findIndex(item => item.id === updatedScript.id);
+  private clonePresetScript(script: PresetScript): PresetScript {
+    return {
+      ...script,
+      actions: script.actions.map((action) => ({ ...action })),
+    };
+  }
 
-      if (index >= 0) {
-        scripts[index] = updatedScript;
-      } else {
+  private createPresetScriptId(): string {
+    const existingIds = new Set((this.context.plugin.settings.presetScripts ?? []).map((script) => script.id));
+    let index = 1;
+    let id = `custom-${Date.now().toString(36)}`;
+    while (existingIds.has(id)) {
+      id = `custom-${Date.now().toString(36)}-${index}`;
+      index += 1;
+    }
+    return id;
+  }
+
+  private createPresetActionId(): string {
+    return `action-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  }
+
+  private openPresetScriptModal(script: PresetScript, isNew: boolean, listEl: HTMLElement): void {
+    const modal = new PresetScriptModal(this.context.app, script, (updatedScript: PresetScript) => {
+      const scripts = [...(this.context.plugin.settings.presetScripts ?? [])];
+      if (isNew) {
         scripts.push(updatedScript);
+      } else {
+        const index = scripts.findIndex((item) => item.id === updatedScript.id);
+        if (index >= 0) {
+          scripts[index] = updatedScript;
+        }
       }
 
       this.context.plugin.settings.presetScripts = scripts;
@@ -936,63 +706,42 @@ export class TerminalSettingsRenderer extends BaseSettingsRenderer {
         this.renderPresetScriptsList(listEl);
       });
     }, isNew);
-
     modal.open();
   }
 
-  private async movePresetScript(listEl: HTMLElement, from: number, to: number): Promise<void> {
-    const scripts = this.context.plugin.settings.presetScripts ?? [];
-    if (from < 0 || from >= scripts.length || to < 0 || to >= scripts.length) {
-      return;
-    }
-    const updated = [...scripts];
-    const [item] = updated.splice(from, 1);
-    updated.splice(to, 0, item);
-    this.context.plugin.settings.presetScripts = updated;
+  private async deletePresetScript(listEl: HTMLElement, scriptId: string): Promise<void> {
+    this.context.plugin.settings.presetScripts = (this.context.plugin.settings.presetScripts ?? [])
+      .filter((script) => script.id !== scriptId);
     await this.saveSettings();
     this.renderPresetScriptsList(listEl);
   }
 
-  private createPresetScriptId(): string {
-    const random = Math.random().toString(36).slice(2, 8);
-    return `preset-${Date.now()}-${random}`;
-  }
-
-  private createPresetActionId(): string {
-    const random = Math.random().toString(36).slice(2, 8);
-    return `action-${Date.now()}-${random}`;
-  }
-
-  private getDefaultBuiltInPresetScript(scriptId: string): PresetScript | null {
-    const script = DEFAULT_PRESET_SCRIPTS.find((item) => item.id === scriptId);
-    return script ? this.clonePresetScript(script) : null;
-  }
-
-  private clonePresetScript(script: PresetScript): PresetScript {
-    const actions = Array.isArray(script.actions)
-      ? script.actions.map((action) => ({ ...action }))
-      : [];
-    return {
-      ...script,
-      actions,
-    };
-  }
-
   private async resetBuiltInPresetScript(listEl: HTMLElement, scriptId: string): Promise<void> {
-    const defaultScript = this.getDefaultBuiltInPresetScript(scriptId);
-    if (!defaultScript) {
+    const defaultScript = DEFAULT_PRESET_SCRIPTS.find((script) => script.id === scriptId);
+    if (!defaultScript) return;
+
+    this.context.plugin.settings.presetScripts = (this.context.plugin.settings.presetScripts ?? [])
+      .map((script) => script.id === scriptId ? this.clonePresetScript(defaultScript) : script);
+    await this.saveSettings();
+    this.renderPresetScriptsList(listEl);
+  }
+
+  private async movePresetScript(listEl: HTMLElement, fromIndex: number, toIndex: number): Promise<void> {
+    const scripts = [...(this.context.plugin.settings.presetScripts ?? [])];
+    if (
+      fromIndex < 0
+      || fromIndex >= scripts.length
+      || toIndex < 0
+      || toIndex >= scripts.length
+      || fromIndex === toIndex
+    ) {
       return;
     }
 
-    const scripts = this.context.plugin.settings.presetScripts ?? [];
-    const index = scripts.findIndex((script) => script.id === scriptId);
-    if (index < 0) {
-      return;
-    }
-
-    const updatedScripts = [...scripts];
-    updatedScripts[index] = defaultScript;
-    this.context.plugin.settings.presetScripts = updatedScripts;
+    const [script] = scripts.splice(fromIndex, 1);
+    if (!script) return;
+    scripts.splice(toIndex, 0, script);
+    this.context.plugin.settings.presetScripts = scripts;
     await this.saveSettings();
     this.renderPresetScriptsList(listEl);
   }
@@ -1415,14 +1164,6 @@ export class TerminalSettingsRenderer extends BaseSettingsRenderer {
   }
 
   private disposeLauncherSnapshotSubscriptions(): void {
-    for (const unsubscribe of this.launcherSnapshotUnsubscribers) {
-      try {
-        unsubscribe();
-      } catch {
-        // ignore
-      }
-    }
-    this.launcherSnapshotUnsubscribers = [];
   }
 
   /**
@@ -1838,21 +1579,6 @@ export class TerminalSettingsRenderer extends BaseSettingsRenderer {
           settings.serverConnection.offlineMode = value;
           void this.saveSettings();
 
-          // Keep the AI-launcher-update-check hint in the preset-scripts
-          // card in sync — the toggle there is suppressed by offline mode
-          // and we want the user to see that immediately.
-          this.refreshAiLauncherUpdateHint?.();
-
-          // When the user just turned offline mode OFF and the update
-          // check is enabled, kick a forced refresh so badges flip from
-          // "Ready" to "Update available" without waiting for the next
-          // menu open. Force clears the 12h registry cache, which would
-          // otherwise still hold the "request failed" entries from
-          // earlier offline-mode probes.
-          if (!value && this.context.plugin.settings.checkAiLauncherUpdates === true) {
-            void this.context.plugin.refreshAiLauncherStatusFromSettings({ force: true });
-          }
-
           void this.context.plugin.getServerManager()
             .then((serverManager) => {
               serverManager.updateOfflineMode(value);
@@ -1874,7 +1600,6 @@ export class TerminalSettingsRenderer extends BaseSettingsRenderer {
 
           // The default ships offline mode off, so the suppression hint
           // in the preset-scripts card needs to disappear after reset.
-          this.refreshAiLauncherUpdateHint?.();
 
           void this.context.plugin.getServerManager()
             .then((serverManager) => {

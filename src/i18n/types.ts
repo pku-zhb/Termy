@@ -60,10 +60,6 @@ export interface TranslationKeys {
       search: string;
       copyPath: string;
       openInExplorer: string;
-      pinToTop: string;
-      alreadyPinnedToTop: string;
-      restorePinnedTerminal: string;
-      focusPinnedTerminal: string;
       newTerminal: string;
       splitTerminal: string;
       splitHorizontal: string;
@@ -98,7 +94,6 @@ export interface TranslationKeys {
     terminalPromptPrevious: string;
     terminalPromptNext: string;
     terminalPromptLastFailed: string;
-    terminalToggleAlwaysOnTop: string;
     presetScriptPrefix: string;
   };
 
@@ -151,9 +146,6 @@ export interface TranslationKeys {
       initFailed: string;
       renderFailed: string;
       createFailed: string;
-      alwaysOnTopOpenFailed: string;
-      alwaysOnTopUnavailable: string;
-      alwaysOnTopRestoreFailed: string;
     };
     settings: {
       backgroundColorReset: string;
@@ -173,10 +165,6 @@ export interface TranslationKeys {
       emptyCommand: string;
       terminalUnavailable: string;
       runFailed: string;
-      launcherUpdateAvailable: string;
-      launcherInstalled: string;
-      launcherUpdated: string;
-      launcherOnLatest: string;
       launcherCopied: string;
     };
   };
@@ -305,25 +293,6 @@ export interface TranslationKeys {
       presetScriptRunInNewTerminal: string;
       presetScriptRunInNewTerminalDesc: string;
       // AI launcher catalog (status bar menu + settings list)
-      aiLauncherCategoryCodingAgent: string;
-      aiLauncherCategoryCodingAgentDesc: string;
-      aiLauncherCategoryWorkflow: string;
-      aiLauncherCategoryWorkflowDesc: string;
-      aiLauncherStatusReady: string;
-      aiLauncherStatusNotInstalled: string;
-      aiLauncherStatusUpdateAvailable: string;
-      aiLauncherStatusChecking: string;
-      aiLauncherUpdateAriaLabel: string;
-      aiLauncherTooltipInstalled: string;
-      aiLauncherTooltipLatest: string;
-      aiLauncherTooltipResolvedFrom: string;
-      aiLauncherTitleInstall: string;
-      aiLauncherTitleUpdate: string;
-      hideUnavailableAiLaunchers: string;
-      hideUnavailableAiLaunchersDesc: string;
-      checkAiLauncherUpdates: string;
-      checkAiLauncherUpdatesDesc: string;
-      aiLauncherOfflineHint: string;
     };
     advanced: {
       performanceAndDebug: string;
@@ -363,30 +332,17 @@ export interface TranslationKeys {
       title: string;
       placeholder: string;
     };
+    confirmCloseTerminal: {
+      tabTitle: string;
+      viewTitle: string;
+      tabMessage: string;
+      viewMessage: string;
+      closeTab: string;
+      closeView: string;
+    };
     presetScript: {
       titleCreate: string;
       titleEdit: string;
-    };
-    launcherInstall: {
-      titleNotInstalled: string;
-      titleUpdate: string;
-      descriptionNotInstalled: string;
-      descriptionUpdate: string;
-      detectedCommand: string;
-      versionLabel: string;
-      cardTitleInstall: string;
-      cardTitleUpgrade: string;
-      cardTitleUpgradeOneClick: string;
-      cardDescInstall: string;
-      cardDescUpgrade: string;
-      cardDescUpgradeOneClick: string;
-      buttonCopy: string;
-      buttonClose: string;
-      buttonOpenDocs: string;
-      buttonInstallNow: string;
-      buttonUpdateNow: string;
-      buttonRunAnyway: string;
-      buttonRunCurrentVersion: string;
     };
   };
 
@@ -397,7 +353,6 @@ export interface TranslationKeys {
     invalidMessage: string;
   };
 
-  // Terminal instance
   terminalInstance: {
     rendererNotSupported: string;
     webglContextLost: string;
@@ -410,7 +365,6 @@ export interface TranslationKeys {
     xtermInitFailed: string;
   };
 
-  // Terminal service
   terminalService: {
     serverNotRunning: string;
     processNotStarted: string;
@@ -418,7 +372,6 @@ export interface TranslationKeys {
     startFailedWithCode: string;
   };
 
-  // Shell types
   shellTypes: {
     cmd: string;
     powershell: string;
@@ -429,34 +382,29 @@ export interface TranslationKeys {
     custom: string;
   };
 
-  // New instance behavior
   newInstanceBehavior: {
     newTab: string;
     newPane: string;
     newWindow: string;
   };
 
-  // Cursor styles
   cursorStyles: {
     block: string;
     underline: string;
     bar: string;
   };
 
-  // Renderer types
   rendererTypes: {
     canvas: string;
     webgl: string;
   };
 
-  // Background image sizes
   backgroundImageSizes: {
     cover: string;
     contain: string;
     auto: string;
   };
 
-  // Shell options
   shellOptions: {
     cmd: string;
     powershell: string;
@@ -469,7 +417,6 @@ export interface TranslationKeys {
     custom: string;
   };
 
-  // Layout options
   layoutOptions: {
     replaceTab: string;
     newTab: string;
@@ -482,14 +429,12 @@ export interface TranslationKeys {
     newWindow: string;
   };
 
-  // Background size options
   backgroundSizeOptions: {
     cover: string;
     contain: string;
     auto: string;
   };
 
-  // Background position options
   backgroundPositionOptions: {
     center: string;
     top: string;
@@ -502,17 +447,14 @@ export interface TranslationKeys {
     bottomRight: string;
   };
 
-  // Cursor style options
   cursorStyleOptions: {
     block: string;
     underline: string;
     bar: string;
   };
 
-  // Renderer options
   rendererOptions: {
     canvas: string;
     webgl: string;
   };
 }
-

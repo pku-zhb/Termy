@@ -10,12 +10,12 @@ import {
   XTVERSION_RESPONSE,
 } from './claudeCodeTuiSupport.ts';
 
-test('buildClaudeCodeTuiEnv declares Termy as an xterm.js host for Claude Code', () => {
+test('buildClaudeCodeTuiEnv declares terminal capabilities without IDE identity', () => {
   const env = buildClaudeCodeTuiEnv({});
 
   assert.equal(env.TERM, 'xterm-256color');
-  assert.equal(env.TERM_PROGRAM, 'vscode');
-  assert.equal(env.TERM_PROGRAM_VERSION, XTERM_JS_VERSION);
+  assert.equal('TERM_PROGRAM' in env, false);
+  assert.equal('TERM_PROGRAM_VERSION' in env, false);
   assert.equal(env.COLORTERM, 'truecolor');
   assert.equal(env.FORCE_HYPERLINK, '1');
   assert.equal('LC_TERMINAL' in env, false);

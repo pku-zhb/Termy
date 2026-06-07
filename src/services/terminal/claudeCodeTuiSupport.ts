@@ -7,9 +7,8 @@ export const XTVERSION_RESPONSE = `\x1bP>|xterm.js(${XTERM_JS_VERSION})\x1b\\`;
 export type ClaudeCodeExtendedKeyboardMode = 'none' | 'modifyOtherKeys';
 
 /**
- * Claude Code has a first-class xterm.js path keyed by TERM_PROGRAM=vscode.
- * Termy embeds xterm.js directly, so declare that capability through the
- * terminal session environment instead of inheriting Obsidian's host shell.
+ * Keep the terminal capability hints narrow. Pretending to be VS Code makes
+ * Claude Code try to attach to an IDE, which is separate from Termy's PTY.
  */
 export function buildClaudeCodeTuiEnv(
   parentEnv: EnvLike = process.env,
@@ -19,8 +18,6 @@ export function buildClaudeCodeTuiEnv(
     TERM: 'xterm-256color',
     COLORTERM: parentEnv.COLORTERM || 'truecolor',
     FORCE_HYPERLINK: parentEnv.FORCE_HYPERLINK || '1',
-    TERM_PROGRAM: 'vscode',
-    TERM_PROGRAM_VERSION: XTERM_JS_VERSION,
   };
 
   return {

@@ -1,7 +1,6 @@
 import type { WorkspaceLeaf, Menu } from 'obsidian';
 import { FileSystemAdapter, ItemView, Notice, TFile, TFolder, setIcon } from 'obsidian';
 import { shell, webUtils } from 'electron';
-import { WebLinksAddon } from '@xterm/addon-web-links';
 
 /**
  * Node built-ins are resolved on demand inside the `TerminalView`
@@ -17,13 +16,17 @@ type PathModule = typeof import('path');
 import type { TerminalService } from '../../services/terminal/terminalService';
 import type { TerminalInstance } from '../../services/terminal/terminalInstance';
 import type { ForegroundInfo } from '../../services/server/types';
-import { CLAUDE_ICON, CODEX_ICON } from './statusIcons';
+import { CLAUDE_ICON, CODEX_ICON, TMUX_ICON } from './statusIcons';
 import {
   collectFallbackDroppedTextPayload,
   collectPreferredDroppedTextPayload,
   resolveDroppedTextInput,
 } from '../../services/terminal/dropTextPayload';
 import { formatClaudeCodePathReferences } from '../../services/terminal/claudeCodePathReferences';
+import {
+  classifyForeground,
+  type TerminalTabStatus,
+} from '../../services/terminal/foregroundStatus';
 import {
   collectTerminalReferenceCandidatePaths,
   fileUriToPlatformPath,
@@ -40,29 +43,68 @@ import {
   obsidianUriToVaultPath,
   toPlatformPath,
 } from '../../services/terminal/terminalPathUtils';
-import { TERMINAL_FILE_URI_REGEX } from '../../services/terminal/terminalFileLinks';
+import {
+  parseTerminalFileUriLinks,
+  parseTerminalFileUriReference,
+} from '../../services/terminal/terminalFileLinks';
 import type { TerminalSettings } from '../../settings/settings';
 import { debugLog, errorLog } from '../../utils/logger';
 import { clamp, normalizeBackgroundPosition, normalizeBackgroundSize, toCssUrl } from '../../utils/styleUtils';
 import { t } from '../../i18n';
+import { confirmCloseTerminal } from './confirmCloseTerminalModal';
 import { RenameTerminalModal } from './renameTerminalModal';
 type XtermTerminal = import('@xterm/xterm').Terminal;
-
-type TabStatus = 'none' | 'tmux' | 'ssh' | 'claude' | 'codex';
-
-/** 根据前台进程信息分类 tab 状态（进程名精确，避免 vim claude.md 这类误判） */
-function classifyForeground(info: ForegroundInfo | null): TabStatus {
-  if (!info) return 'none';
-  const name = info.name.toLowerCase();
-  const cmd = info.cmdline.toLowerCase();
-  if (name.includes('tmux')) return 'tmux';
-  if (name === 'ssh') return 'ssh';
-  if (name === 'claude' || (name === 'node' && cmd.includes('claude'))) return 'claude';
-  if (name === 'codex' || (name === 'node' && cmd.includes('codex'))) return 'codex';
-  return 'none';
-}
+type XtermDisposable = import('@xterm/xterm').IDisposable;
+type XtermLink = import('@xterm/xterm').ILink;
 
 export const TERMINAL_VIEW_TYPE = 'terminal-view-dev';
+const IDLE_SHELL_PROCESS_NAMES = new Set([
+  'bash',
+  'cmd',
+  'cmd.exe',
+  'csh',
+  'dash',
+  'elvish',
+  'fish',
+  'ksh',
+  'nu',
+  'powershell',
+  'powershell.exe',
+  'pwsh',
+  'pwsh.exe',
+  'sh',
+  'tcsh',
+  'xonsh',
+  'zsh',
+]);
+
+interface TerminalCloseRisk {
+  processName: string;
+}
+
+function isIdleShellForeground(info: ForegroundInfo): boolean {
+  if (classifyForeground(info) !== 'none') {
+    return false;
+  }
+
+  const processName = getForegroundProcessName(info).toLowerCase();
+  return IDLE_SHELL_PROCESS_NAMES.has(processName);
+}
+
+function getForegroundProcessName(info: ForegroundInfo): string {
+  return basenameCommand(info.name) || basenameCommand(firstCommandToken(info.cmdline));
+}
+
+function firstCommandToken(commandLine: string): string {
+  const match = commandLine.trim().match(/^(?:"([^"]+)"|'([^']+)'|(\S+))/);
+  return match?.[1] ?? match?.[2] ?? match?.[3] ?? '';
+}
+
+function basenameCommand(command: string): string {
+  const trimmed = command.trim();
+  const basename = trimmed.split(/[\\/]/).pop() ?? trimmed;
+  return basename.replace(/^-+/, '');
+}
 
 export type TerminalAttachOptions = {
   focus?: boolean;
@@ -74,7 +116,7 @@ export type TerminalAttachOptions = {
 export class TerminalView extends ItemView {
   protected terminalService: TerminalService | null;
   private terminalInstance: TerminalInstance | null = null;  // 始终指向当前 active 终端
-  private tabs: Array<{ terminal: TerminalInstance; paneEl: HTMLElement; customName: string | null; status: TabStatus }> = [];
+  private tabs: Array<{ terminal: TerminalInstance; paneEl: HTMLElement; customName: string | null; status: TerminalTabStatus }> = [];
   private activeIndex = -1;
   private tabBarEl: HTMLElement | null = null;
   private terminalContainer: HTMLElement | null = null;
@@ -84,7 +126,7 @@ export class TerminalView extends ItemView {
   private searchContainer: HTMLElement | null = null;
   private searchInput: HTMLInputElement | null = null;
   private resizeObserver: ResizeObserver | null = null;
-  private fileUriLinkAddon: WebLinksAddon | null = null;
+  private fileUriLinkProvider: XtermDisposable | null = null;
   private titleChangeCleanup: (() => void) | null = null;
   private searchStateCleanup: (() => void) | null = null;
   private initPromise: Promise<TerminalInstance> | null = null;
@@ -93,12 +135,19 @@ export class TerminalView extends ItemView {
 
   private readonly fs: FsModule;
   private readonly path: PathModule;
+  private readonly foregroundByTerminal = new WeakMap<TerminalInstance, ForegroundInfo>();
+  private readonly detachLeafWithoutConfirmation: WorkspaceLeaf['detach'];
+  private viewCloseConfirmationPromise: Promise<boolean> | null = null;
 
   constructor(leaf: WorkspaceLeaf, terminalService: TerminalService | null) {
     super(leaf);
     this.terminalService = terminalService;
     this.fs = window.require('fs') as FsModule;
     this.path = window.require('path') as PathModule;
+    this.detachLeafWithoutConfirmation = leaf.detach.bind(leaf) as WorkspaceLeaf['detach'];
+    leaf.detach = () => {
+      void this.detachLeafWithConfirmation();
+    };
     this.initPromise = new Promise<TerminalInstance>((resolve, reject) => {
       this.initResolve = resolve;
       this.initReject = reject;
@@ -269,12 +318,11 @@ export class TerminalView extends ItemView {
   }
 
   async onClose(): Promise<void> {
-    this.getTerminalPlugin()?.handleTerminalViewClosed(this);
-
+    this.leaf.detach = this.detachLeafWithoutConfirmation;
     this.resizeObserver?.disconnect();
     this.resizeObserver = null;
-    this.fileUriLinkAddon?.dispose();
-    this.fileUriLinkAddon = null;
+    this.fileUriLinkProvider?.dispose();
+    this.fileUriLinkProvider = null;
     this.titleChangeCleanup?.();
     this.titleChangeCleanup = null;
     this.searchStateCleanup?.();
@@ -304,8 +352,8 @@ export class TerminalView extends ItemView {
     if (!terminal) return null;
 
     this.detachTerminalBindings();
-    this.fileUriLinkAddon?.dispose();
-    this.fileUriLinkAddon = null;
+    this.fileUriLinkProvider?.dispose();
+    this.fileUriLinkProvider = null;
     terminal.detach();
     this.terminalInstance = null;
     this.initPromise = Promise.resolve(terminal);
@@ -369,7 +417,7 @@ export class TerminalView extends ItemView {
       new Notice(t('notices.terminal.initFailed', { message }));
       paneEl.remove();
       if (this.tabs.length === 0) {
-        this.leaf.detach();
+        this.detachLeafWithoutConfirmation();
       }
       return;
     }
@@ -388,19 +436,104 @@ export class TerminalView extends ItemView {
 
     this.tabs.push({ terminal, paneEl, customName: null, status: 'none' });
 
-    // 订阅前台进程变化，更新该 tab 状态（tmux/ssh/claude/codex）
+    // Track foreground changes so the tab can show tmux/ssh/Claude/Codex status.
     terminal.onForegroundChange((info) => {
-      const tab = this.tabs.find((t) => t.terminal === terminal);
-      if (!tab) return;
-      const next = classifyForeground(info);
-      if (tab.status !== next) {
-        tab.status = next;
-        this.renderTabBar();
-      }
+      this.foregroundByTerminal.set(terminal, info);
+      this.updateTabForegroundStatus(terminal, info);
     });
 
-    this.activeIndex = -1; // 强制 setActiveTab 重新绑定到新终端
+    this.activeIndex = -1; // Force setActiveTab to bind the new terminal.
     this.setActiveTab(this.tabs.length - 1);
+  }
+
+  private setTerminalTabStatus(terminal: TerminalInstance, status: TerminalTabStatus): void {
+    const tab = this.tabs.find((candidate) => candidate.terminal === terminal);
+    if (!tab || tab.status === status) {
+      return;
+    }
+
+    tab.status = status;
+    this.renderTabBar();
+  }
+
+  private updateTabForegroundStatus(
+    terminal: TerminalInstance,
+    info: ForegroundInfo,
+  ): void {
+    const foregroundStatus = classifyForeground(info);
+    if (foregroundStatus !== 'none') {
+      if (foregroundStatus !== 'claude') {
+        terminal.resetClaudeCodeSession();
+      }
+      this.setTerminalTabStatus(terminal, foregroundStatus);
+      return;
+    }
+
+    if (isIdleShellForeground(info)) {
+      terminal.resetClaudeCodeSession();
+      this.setTerminalTabStatus(terminal, 'none');
+      return;
+    }
+
+    this.setTerminalTabStatus(terminal, terminal.isClaudeCodeSession() ? 'claude' : 'none');
+  }
+
+  private async confirmCloseTabIfNeeded(terminal: TerminalInstance): Promise<boolean> {
+    const risk = this.getCloseRisk(terminal);
+    if (!risk) {
+      return true;
+    }
+
+    return confirmCloseTerminal(this.app, {
+      title: t('modals.confirmCloseTerminal.tabTitle'),
+      message: t('modals.confirmCloseTerminal.tabMessage', { process: risk.processName }),
+      confirmText: t('modals.confirmCloseTerminal.closeTab'),
+    });
+  }
+
+  private async confirmCloseViewIfNeeded(): Promise<boolean> {
+    const riskyTabs = this.tabs.filter((tab) => this.getCloseRisk(tab.terminal) !== null);
+    if (riskyTabs.length === 0) {
+      return true;
+    }
+
+    if (!this.viewCloseConfirmationPromise) {
+      this.viewCloseConfirmationPromise = confirmCloseTerminal(this.app, {
+        title: t('modals.confirmCloseTerminal.viewTitle'),
+        message: t('modals.confirmCloseTerminal.viewMessage', { count: riskyTabs.length }),
+        confirmText: t('modals.confirmCloseTerminal.closeView'),
+      }).finally(() => {
+        this.viewCloseConfirmationPromise = null;
+      });
+    }
+
+    return this.viewCloseConfirmationPromise;
+  }
+
+  private async detachLeafWithConfirmation(): Promise<void> {
+    if (!(await this.confirmCloseViewIfNeeded())) {
+      return;
+    }
+
+    this.detachLeafWithoutConfirmation();
+  }
+
+  private getCloseRisk(terminal: TerminalInstance): TerminalCloseRisk | null {
+    const tab = this.tabs.find((candidate) => candidate.terminal === terminal);
+    if (terminal.isClaudeCodeSession()) {
+      return { processName: 'claude' };
+    }
+    if (tab && tab.status !== 'none') {
+      return { processName: tab.status };
+    }
+
+    const info = this.foregroundByTerminal.get(terminal);
+    if (!info || isIdleShellForeground(info)) {
+      return null;
+    }
+
+    const processName = getForegroundProcessName(info);
+    return processName ? { processName } : null;
   }
 
   /**
@@ -444,6 +577,9 @@ export class TerminalView extends ItemView {
   async closeTab(index: number): Promise<void> {
     const tab = this.tabs[index];
     if (!tab) return;
+    if (!(await this.confirmCloseTabIfNeeded(tab.terminal))) {
+      return;
+    }
 
     try {
       await this.terminalService?.destroyTerminal(tab.terminal.id);
@@ -456,7 +592,7 @@ export class TerminalView extends ItemView {
     if (this.tabs.length === 0) {
       this.terminalInstance = null;
       this.activeIndex = -1;
-      this.leaf.detach();
+      this.detachLeafWithoutConfirmation();
       return;
     }
 
@@ -485,17 +621,23 @@ export class TerminalView extends ItemView {
       tabEl.toggleClass('is-active', i === this.activeIndex);
       tabEl.addEventListener('click', () => this.setActiveTab(i));
 
-      // 序号徽标，对应 Opt+数字切换键（1~9，第 10 个为 0）；tmux 时绿底
+      // Tab number badge for Opt+number switching (1-9, tenth tab is 0).
       if (i < 10) {
         const indexEl = tabEl.createSpan('termy-tab-index');
         indexEl.setText(i === 9 ? '0' : String(i + 1));
-        indexEl.toggleClass('is-tmux', tab.status === 'tmux');
       }
 
-      // 状态图标：claude/codex 用各自图标，ssh 用地球
-      if (tab.status === 'claude' || tab.status === 'codex') {
+      // Status icon for tmux/Claude/Codex/SSH.
+      if (tab.status === 'tmux' || tab.status === 'claude' || tab.status === 'codex') {
         const iconEl = tabEl.createEl('img', { cls: 'termy-tab-status-icon' });
-        iconEl.src = tab.status === 'claude' ? CLAUDE_ICON : CODEX_ICON;
+        iconEl.toggleClass('is-tmux', tab.status === 'tmux');
+        iconEl.alt = '';
+        iconEl.title = tab.status;
+        iconEl.src = tab.status === 'tmux'
+          ? TMUX_ICON
+          : tab.status === 'claude'
+            ? CLAUDE_ICON
+            : CODEX_ICON;
       } else if (tab.status === 'ssh') {
         const iconEl = tabEl.createSpan('termy-tab-status-icon');
         setIcon(iconEl, 'globe');
@@ -1045,21 +1187,121 @@ export class TerminalView extends ItemView {
       },
     };
 
-    this.fileUriLinkAddon?.dispose();
-    this.fileUriLinkAddon = new WebLinksAddon((event, uri) => {
-      event.preventDefault();
-      void this.openTerminalHyperlinkTarget(uri);
-    }, {
-      urlRegex: TERMINAL_FILE_URI_REGEX,
+    this.fileUriLinkProvider?.dispose();
+    this.fileUriLinkProvider = xterm.registerLinkProvider({
+      provideLinks: (bufferLineNumber, callback) => {
+        const zeroBasedLineNumber = bufferLineNumber - 1;
+        if (zeroBasedLineNumber < 0) {
+          callback(undefined);
+          return;
+        }
+
+        const window = this.getTerminalLinkWindow(xterm, zeroBasedLineNumber);
+        if (!window) {
+          callback(undefined);
+          return;
+        }
+
+        const links = parseTerminalFileUriLinks(window.text)
+          .map((link): XtermLink | null => {
+            const start = this.stringIndexToTerminalBufferPosition(
+              link.startIndex,
+              window.lineTexts,
+              window.startLineIndex,
+            );
+            const end = this.stringIndexToTerminalBufferPosition(
+              link.endIndex - 1,
+              window.lineTexts,
+              window.startLineIndex,
+            );
+            if (!start || !end) {
+              return null;
+            }
+
+            const xtermLink: XtermLink = {
+              text: link.uri,
+              range: { start, end },
+              activate: (event, text) => {
+                event.preventDefault();
+                void this.openTerminalHyperlinkTarget(text);
+              },
+            };
+            return xtermLink;
+          })
+          .filter((link): link is XtermLink =>
+            link !== null
+            && link.range.start.y <= bufferLineNumber
+            && link.range.end.y >= bufferLineNumber
+          );
+
+        callback(links.length > 0 ? links : undefined);
+      },
     });
-    xterm.loadAddon(this.fileUriLinkAddon);
+  }
+
+  private getTerminalLinkWindow(
+    xterm: XtermTerminal,
+    bufferLineNumber: number,
+  ): { text: string; lineTexts: string[]; startLineIndex: number } | null {
+    const buffer = xterm.buffer.active;
+    if (!buffer.getLine(bufferLineNumber)) {
+      return null;
+    }
+
+    let startLineIndex = bufferLineNumber;
+    while (startLineIndex > 0 && buffer.getLine(startLineIndex)?.isWrapped) {
+      startLineIndex -= 1;
+    }
+
+    let endLineIndex = bufferLineNumber;
+    while (buffer.getLine(endLineIndex + 1)?.isWrapped) {
+      endLineIndex += 1;
+    }
+
+    const lineTexts: string[] = [];
+    for (let lineIndex = startLineIndex; lineIndex <= endLineIndex; lineIndex += 1) {
+      const line = buffer.getLine(lineIndex);
+      if (!line) {
+        break;
+      }
+      lineTexts.push(line.translateToString(true));
+    }
+
+    return {
+      text: lineTexts.join(''),
+      lineTexts,
+      startLineIndex,
+    };
+  }
+
+  private stringIndexToTerminalBufferPosition(
+    stringIndex: number,
+    lineTexts: string[],
+    startLineIndex: number,
+  ): { x: number; y: number } | null {
+    let remainingIndex = stringIndex;
+    for (let lineOffset = 0; lineOffset < lineTexts.length; lineOffset += 1) {
+      const lineLength = lineTexts[lineOffset].length;
+      if (remainingIndex < lineLength) {
+        return {
+          x: remainingIndex + 1,
+          y: startLineIndex + lineOffset + 1,
+        };
+      }
+      remainingIndex -= lineLength;
+    }
+
+    return null;
   }
 
   private async openTerminalHyperlinkTarget(target: string): Promise<void> {
-    const filePath = fileUriToPlatformPath(target);
-    if (filePath) {
-      await this.openTerminalFileReference(filePath);
-      return;
+    const fileUriReference = parseTerminalFileUriReference(target);
+    if (fileUriReference) {
+      const filePath = fileUriToPlatformPath(fileUriReference.uri);
+      if (filePath) {
+        await this.openTerminalFileReference(filePath, fileUriReference.line);
+        return;
+      }
     }
 
     if (!this.isAllowedExternalHyperlink(target)) {
@@ -1084,7 +1326,7 @@ export class TerminalView extends ItemView {
     }
   }
 
-  private async openTerminalFileReference(pathLike: string): Promise<void> {
+  private async openTerminalFileReference(pathLike: string, line?: number): Promise<void> {
     const resolved = this.resolveTerminalFileReference(pathLike);
     if (!resolved) {
       new Notice(t('notices.terminal.fileReferenceUnavailable'));
@@ -1092,7 +1334,7 @@ export class TerminalView extends ItemView {
     }
 
     if (resolved.file) {
-      await this.openVaultFileReference(resolved.file);
+      await this.openVaultFileReference(resolved.file, line);
       return;
     }
 
@@ -1198,9 +1440,9 @@ export class TerminalView extends ItemView {
     );
   }
 
-  private async openVaultFileReference(file: TFile): Promise<void> {
+  private async openVaultFileReference(file: TFile, line?: number): Promise<void> {
     const leaf = this.app.workspace.getLeaf(false);
-    await leaf.openFile(file);
+    await leaf.openFile(file, line ? { eState: { line: line - 1, col: 0 } } : undefined);
     this.app.workspace.setActiveLeaf(leaf, { focus: true });
   }
 
@@ -1401,10 +1643,6 @@ export class TerminalView extends ItemView {
   private getTerminalPlugin(): {
     settings: TerminalSettings;
     activateTerminalView: () => Promise<void>;
-    toggleAlwaysOnTopTerminal: (terminalView: TerminalView) => Promise<void>;
-    getAlwaysOnTopTerminalLabel: (terminalView: TerminalView) => string;
-    isAlwaysOnTopTerminal: (terminalView: TerminalView) => boolean;
-    handleTerminalViewClosed: (terminalView: TerminalView) => void;
   } | null {
     const appWithPlugins = this.app as typeof this.app & {
       plugins?: { getPlugin?: (id: string) => unknown };
@@ -1417,25 +1655,13 @@ export class TerminalView extends ItemView {
   private isTerminalPlugin(value: unknown): value is {
     settings: TerminalSettings;
     activateTerminalView: () => Promise<void>;
-    toggleAlwaysOnTopTerminal: (terminalView: TerminalView) => Promise<void>;
-    getAlwaysOnTopTerminalLabel: (terminalView: TerminalView) => string;
-    isAlwaysOnTopTerminal: (terminalView: TerminalView) => boolean;
-    handleTerminalViewClosed: (terminalView: TerminalView) => void;
   } {
     if (!value || typeof value !== 'object') return false;
     const candidate = value as {
       settings?: unknown;
       activateTerminalView?: unknown;
-      toggleAlwaysOnTopTerminal?: unknown;
-      getAlwaysOnTopTerminalLabel?: unknown;
-      isAlwaysOnTopTerminal?: unknown;
-      handleTerminalViewClosed?: unknown;
     };
     return typeof candidate.activateTerminalView === 'function'
-      && typeof candidate.toggleAlwaysOnTopTerminal === 'function'
-      && typeof candidate.getAlwaysOnTopTerminalLabel === 'function'
-      && typeof candidate.isAlwaysOnTopTerminal === 'function'
-      && typeof candidate.handleTerminalViewClosed === 'function'
       && typeof candidate.settings === 'object';
   }
 }

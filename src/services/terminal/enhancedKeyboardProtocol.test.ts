@@ -153,6 +153,36 @@ test('evaluateKeyboardDecision routes Shift+Enter through paste-newline path', (
   assert.deepEqual(decision, { type: 'paste-newline' });
 });
 
+test('evaluateKeyboardDecision bypasses printable text keys before extended keyboard encoding', () => {
+  const context = {
+    hasSelection: false,
+    extendedKeyboardMode: 'modifyOtherKeys' as const,
+  };
+  const events = [
+    createKeyboardEvent('a', { code: 'KeyA' }),
+    createKeyboardEvent(',', { code: 'Comma' }),
+    createKeyboardEvent(' ', { code: 'Space' }),
+    createKeyboardEvent('?', { code: 'Slash', shiftKey: true }),
+    createKeyboardEvent('1', { code: 'Digit1', shiftKey: true }),
+  ];
+
+  for (const event of events) {
+    assert.deepEqual(evaluateKeyboardDecision(event, context), { type: 'bypass-xterm-text-input' });
+  }
+});
+
+test('evaluateKeyboardDecision keeps Alt printable keys on the text input path', () => {
+  const decision = evaluateKeyboardDecision(
+    createKeyboardEvent('c', { code: 'KeyC', altKey: true }),
+    {
+      hasSelection: false,
+      extendedKeyboardMode: 'modifyOtherKeys',
+    },
+  );
+
+  assert.deepEqual(decision, { type: 'bypass-xterm-text-input' });
+});
+
 test('evaluateKeyboardDecision routes Ctrl+Enter through paste-newline path', () => {
   const event = createKeyboardEvent('Enter', { ctrlKey: true });
   const decision = evaluateKeyboardDecision(event, { hasSelection: false });
@@ -277,9 +307,9 @@ test('handleKeyboardEvent queues win32-input-mode keyup events when configured',
   assert.deepEqual(harness.queuedInput, ['\x1b[65;30;97;0;0;1_']);
 });
 
-test('handleKeyboardEvent blocks keypress default handling in win32-input-mode', () => {
+test('handleKeyboardEvent blocks non-text keypress default handling in win32-input-mode', () => {
   const { harness, protocol } = createWin32ProtocolHarness();
-  const event = createKeyboardEvent('a', { code: 'KeyA', type: 'keypress' });
+  const event = createKeyboardEvent('Enter', { type: 'keypress' });
 
   const allowed = protocol.handleKeyboardEvent(event);
 
@@ -326,6 +356,70 @@ test('handleKeyboardEvent lets xterm handle win32 IME process keys even when bro
   assert.deepEqual(harness.pastedTexts, []);
 });
 
+
+test('handleKeyboardEvent lets xterm handle committed fullwidth punctuation in win32-input-mode', () => {
+  const { harness, protocol } = createWin32ProtocolHarness();
+  const event = createKeyboardEvent('，', { code: 'Comma', type: 'keypress' });
+
+  const allowed = protocol.handleKeyboardEvent(event);
+
+  assert.equal(allowed, true);
+  assert.equal(event.prevented, false);
+  assert.deepEqual(harness.queuedInput, []);
+  assert.deepEqual(harness.insertedTexts, []);
+  assert.deepEqual(harness.pastedTexts, []);
+});
+
+test('handleKeyboardEvent bypasses xterm key handling for printable text keys in win32-input-mode', () => {
+  const cases = [
+    createKeyboardEvent('a', { code: 'KeyA' }),
+    createKeyboardEvent(',', { code: 'Comma' }),
+    createKeyboardEvent('.', { code: 'Period' }),
+    createKeyboardEvent(' ', { code: 'Space' }),
+    createKeyboardEvent('!', { code: 'Digit1', shiftKey: true }),
+    createKeyboardEvent('?', { code: 'Slash', shiftKey: true }),
+    createKeyboardEvent('1', { code: 'Digit1', shiftKey: true }),
+  ];
+
+  for (const event of cases) {
+    const { harness, protocol } = createWin32ProtocolHarness();
+
+    const allowed = protocol.handleKeyboardEvent(event);
+
+    assert.equal(allowed, false, `expected ${event.code ?? event.key} to bypass xterm key handling`);
+    assert.equal(event.prevented, false);
+    assert.deepEqual(harness.queuedInput, []);
+    assert.deepEqual(harness.insertedTexts, []);
+    assert.deepEqual(harness.pastedTexts, []);
+  }
+});
+
+test('handleKeyboardEvent lets xterm handle printable keypress text in win32-input-mode', () => {
+  const { harness, protocol } = createWin32ProtocolHarness();
+  const event = createKeyboardEvent('a', { code: 'KeyA', type: 'keypress' });
+
+  const allowed = protocol.handleKeyboardEvent(event);
+
+  assert.equal(allowed, true);
+  assert.equal(event.prevented, false);
+  assert.deepEqual(harness.queuedInput, []);
+  assert.deepEqual(harness.insertedTexts, []);
+  assert.deepEqual(harness.pastedTexts, []);
+});
+
+test('handleKeyboardEvent still blocks non-text keypresses in win32-input-mode', () => {
+  const { harness, protocol } = createWin32ProtocolHarness();
+  const event = createKeyboardEvent('Enter', { type: 'keypress' });
+
+  const allowed = protocol.handleKeyboardEvent(event);
+
+  assert.equal(allowed, false);
+  assert.equal(event.prevented, true);
+  assert.deepEqual(harness.queuedInput, []);
+  assert.deepEqual(harness.insertedTexts, []);
+  assert.deepEqual(harness.pastedTexts, []);
+});
+
 test('handleKeyboardEvent suppresses follow-up win32 shortcut events after local paste handling', async () => {
   const { harness, protocol } = createWin32ProtocolHarness();
 
@@ -354,7 +448,7 @@ test('handleKeyboardEvent suppresses follow-up win32 shortcut events after local
   assert.deepEqual(harness.queuedInput, []);
 
   assert.equal(protocol.handleKeyboardEvent(nextKeydown), false);
-  assert.deepEqual(harness.queuedInput, ['\x1b[65;30;97;1;0;1_']);
+  assert.deepEqual(harness.queuedInput, []);
 });
 
 test('handleKeyboardEvent allows repeat Ctrl+V keydowns while Ctrl is still held in win32-input-mode', async () => {

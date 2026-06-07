@@ -12,6 +12,7 @@ import type { PtyClient } from '@/services/server/ptyClient';
 import type { ForegroundInfo, PtyConfig, ShellEvent, ShellEventSource } from '@/services/server/types';
 import type { DefaultShellOption } from './terminalService';
 import { EnhancedKeyboardProtocol, formatPastedTerminalText } from './enhancedKeyboardProtocol';
+import { isImeCommitFallbackText } from './imeCommitFallback';
 import {
   createSynchronizedOutputCompatibilityState,
   filterSynchronizedOutputScrollbackPurge,
@@ -47,6 +48,9 @@ type CanvasAddon = import('@xterm/addon-canvas').CanvasAddon;
 type WebglAddon = import('@xterm/addon-webgl').WebglAddon;
 type IMarker = import('@xterm/xterm').IMarker;
 type IDisposable = import('@xterm/xterm').IDisposable;
+
+const IME_COMMIT_FALLBACK_DELAY_MS = 16;
+const IME_COMMIT_RECENT_DATA_WINDOW_MS = 32;
 
 const XTERM_BACKGROUND_LAYER_SELECTOR = [
   '.xterm',
@@ -209,13 +213,15 @@ export class TerminalInstance {
   private pendingInput: string[] = [];
   private inputFlushTimer: number | null = null;
   private readonly inputBatchIntervalMs = 4;
+  private pendingImeCommitFallbackTimer: number | null = null;
+  private pendingImeCommitFallbackText = '';
+  private lastXtermInputData = '';
+  private lastXtermInputDataAt = 0;
 
   // Context menu callbacks for actions like split/new terminal that need external handling
   private contextMenuCallbacks: {
     onNewTerminal?: () => void;
     onSplitTerminal?: (direction: 'horizontal' | 'vertical') => void;
-    onToggleAlwaysOnTop?: () => void;
-    getAlwaysOnTopLabel?: () => string;
     getDefaultShellOptions?: () => DefaultShellOption[];
     onDefaultShellChange?: (shellType: DefaultShellOption['shellType']) => void;
   } = {};
@@ -701,6 +707,7 @@ export class TerminalInstance {
     }));
 
     this.xterm.onData((data) => {
+      this.recordXtermInputData(data);
       keyboardProtocol.handleData(data);
     });
 
@@ -709,8 +716,8 @@ export class TerminalInstance {
     });
 
     this.xterm.attachCustomKeyEventHandler((event: KeyboardEvent) => {
-      // Termy Dev: Opt 系 tab 导航键 —— 用物理键码识别（规避 mac Alt 特殊字符），
-      // 直接驱动 tab 操作并阻止冒泡，不交给终端 shell
+      // Use physical key codes for Opt tab navigation so macOS Alt-generated
+      // characters do not leak into the shell.
       const navAction = this.matchTabNavKey(event);
       if (navAction) {
         if (event.type === 'keydown') {
@@ -720,6 +727,7 @@ export class TerminalInstance {
         }
         return false;
       }
+
       return keyboardProtocol.handleKeyboardEvent(event);
     });
   }
@@ -759,7 +767,10 @@ export class TerminalInstance {
   }
 
   private getClaudeCodeExtendedKeyboardMode(): ClaudeCodeExtendedKeyboardMode {
-    return this.claudeCodeSessionState.getExtendedKeyboardMode();
+    // Keep normal terminal text input first. Claude Code's extended keyboard
+    // mode can steal printable IME keys, so leave it disabled at runtime until
+    // it can be reintroduced without interfering with composition.
+    return 'none';
   }
 
   private observeClaudeCodeXtversionQuery(): void {
@@ -831,6 +842,61 @@ export class TerminalInstance {
       this.inputFlushTimer = null;
     }
     this.pendingInput = [];
+    this.clearImeCommitFallback();
+  }
+
+  private clearImeCommitFallback(): void {
+    if (this.pendingImeCommitFallbackTimer !== null) {
+      window.clearTimeout(this.pendingImeCommitFallbackTimer);
+      this.pendingImeCommitFallbackTimer = null;
+    }
+    this.pendingImeCommitFallbackText = '';
+  }
+
+  private recordXtermInputData(data: string): void {
+    this.lastXtermInputData = data;
+    this.lastXtermInputDataAt = Date.now();
+
+    if (
+      this.pendingImeCommitFallbackText
+      && data.includes(this.pendingImeCommitFallbackText)
+    ) {
+      this.clearImeCommitFallback();
+    }
+  }
+
+  private hasRecentlySeenXtermInputData(text: string): boolean {
+    return Date.now() - this.lastXtermInputDataAt <= IME_COMMIT_RECENT_DATA_WINDOW_MS
+      && this.lastXtermInputData.includes(text);
+  }
+
+  private scheduleImeCommitFallback(text: string | null | undefined): void {
+    if (!isImeCommitFallbackText(text)) {
+      return;
+    }
+
+    if (this.hasRecentlySeenXtermInputData(text)) {
+      return;
+    }
+
+    this.clearImeCommitFallback();
+    this.pendingImeCommitFallbackText = text;
+    this.pendingImeCommitFallbackTimer = window.setTimeout(() => {
+      const pendingText = this.pendingImeCommitFallbackText;
+      this.pendingImeCommitFallbackTimer = null;
+      this.pendingImeCommitFallbackText = '';
+
+      if (
+        this.isDestroyed
+        || !isImeCommitFallbackText(pendingText)
+        || this.hasRecentlySeenXtermInputData(pendingText)
+      ) {
+        return;
+      }
+
+      this.queueInput(pendingText);
+      this.flushPendingInput();
+    }, IME_COMMIT_FALLBACK_DELAY_MS);
   }
 
   private flushPendingInput(): void {
@@ -1040,6 +1106,7 @@ export class TerminalInstance {
    */
   private setupDomEventHandlers(container: HTMLElement): void {
     this.disposeDomEventHandlers();
+    this.setupImeCommitFallback(container);
     this.setupKeyboardShortcuts(container);
     this.setupContextMenu(container);
   }
@@ -1057,9 +1124,27 @@ export class TerminalInstance {
   }
 
   private disposeDomEventHandlers(): void {
+    this.clearImeCommitFallback();
+
     for (const cleanup of this.domEventCleanups.splice(0)) {
       cleanup();
     }
+  }
+
+  private setupImeCommitFallback(container: HTMLElement): void {
+    const textarea = container.querySelector<HTMLTextAreaElement>('.xterm-helper-textarea');
+    if (!textarea) {
+      return;
+    }
+
+    this.addDomEventListener(textarea, 'beforeinput', (event: InputEvent) => {
+      if (event.inputType === 'insertText' || event.inputType === 'insertCompositionText') {
+        this.scheduleImeCommitFallback(event.data);
+      }
+    });
+    this.addDomEventListener(textarea, 'compositionend', (event: CompositionEvent) => {
+      this.scheduleImeCommitFallback(event.data);
+    });
   }
 
   private setupKeyboardShortcuts(container: HTMLElement): void {
@@ -1816,9 +1901,11 @@ export class TerminalInstance {
   }
 
   /**
-   * 识别 Opt 系 tab 导航键（用 event.code 物理键码，规避 mac 上 Alt+字母产生特殊字符的问题）
+   * Match Opt tab navigation keys using physical key codes.
    */
   private matchTabNavKey(event: KeyboardEvent): TermyTabNavAction | null {
+    const legacyKeyCode = (event as unknown as { keyCode?: number })['keyCode'];
+    if (event.isComposing || event.key === 'Process' || legacyKeyCode === 229) return null;
     if (!event.altKey || event.ctrlKey || event.metaKey) return null;
     const code = event.code;
     if (code === 'Tab') return event.shiftKey ? { type: 'prev' } : { type: 'next' };
@@ -1829,15 +1916,10 @@ export class TerminalInstance {
     const digit = /^Digit([0-9])$/.exec(code);
     if (digit) {
       const d = parseInt(digit[1], 10);
-      // 1~9 → 第 1~9 个；0 → 第 10 个
+      // 1-9 select tabs 1-9; 0 selects tab 10.
       return { type: 'goto', index: d === 0 ? 9 : d - 1 };
     }
     return null;
-  }
-
-  setOnToggleAlwaysOnTop(callback: () => void, getLabel: () => string): void {
-    this.contextMenuCallbacks.onToggleAlwaysOnTop = callback;
-    this.contextMenuCallbacks.getAlwaysOnTopLabel = getLabel;
   }
 
   setDefaultShellMenuCallbacks(
@@ -1898,6 +1980,10 @@ export class TerminalInstance {
 
   isClaudeCodeSession(): boolean {
     return this.claudeCodeSessionState.isActive();
+  }
+
+  resetClaudeCodeSession(): void {
+    this.claudeCodeSessionState.reset();
   }
 
   getOptions(): Readonly<TerminalOptions> {

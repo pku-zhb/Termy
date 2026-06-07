@@ -2306,14 +2306,7 @@
   color: var(--text-on-accent);
 }
 
-/* tmux 在前台运行：序号绿底 */
-.termy-tab-index.is-tmux,
-.termy-tab.is-active .termy-tab-index.is-tmux {
-  background-color: var(--color-green, #3fb950);
-  color: #fff;
-}
-
-/* 状态图标（claude / codex 图标，ssh 地球） */
+/* Status icons for tmux, Claude, Codex, and SSH. */
 .termy-tab-status-icon {
   display: inline-flex;
   align-items: center;

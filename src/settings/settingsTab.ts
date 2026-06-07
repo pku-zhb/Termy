@@ -4,7 +4,7 @@
  */
 
 import type { App } from 'obsidian';
-import { PluginSettingTab, setIcon } from 'obsidian';
+import { PluginSettingTab } from 'obsidian';
 import type TerminalPlugin from '../main';
 import { TerminalSettingsRenderer } from './renderers/terminalSettingsRenderer';
 import type { RendererContext } from './types';
@@ -84,4 +84,3 @@ export class TerminalSettingTab extends PluginSettingTab {
     });
   }
 }
-

@@ -1,6 +1,7 @@
 import {
   encodeWin32InputModeKeyEvent,
 } from './win32InputModeEncoder.ts';
+import { shouldBypassKeyboardEncodingForTextKey } from './imeCommitFallback.ts';
 import {
   encodeClaudeCodeExtendedKey,
   type ClaudeCodeExtendedKeyboardMode,
@@ -33,6 +34,7 @@ export type KeyboardDecision =
   | { type: 'copy-selection' }
   | { type: 'paste-from-clipboard' }
   | { type: 'block-default' }
+  | { type: 'bypass-xterm-text-input' }
   | { type: 'send-input'; data: string }
   | { type: 'write-text'; text: string }
   | { type: 'paste-newline' };
@@ -69,17 +71,38 @@ function isImeCompositionKeyboardEvent(event: KeyboardEventLike): boolean {
   return event.isComposing === true || event.key === 'Process' || event.keyCode === 229;
 }
 
+function isCommittedImeTextKeypress(event: KeyboardEventLike): boolean {
+  if (event.type !== 'keypress' || event.ctrlKey || event.metaKey) {
+    return false;
+  }
+
+  const chars = Array.from(event.key);
+  if (chars.length !== 1) {
+    return false;
+  }
+
+  return (chars[0]?.codePointAt(0) ?? 0) > 0x7f;
+}
+
 export function evaluateKeyboardDecision(
   event: KeyboardEventLike,
   context: KeyboardDecisionContext
 ): KeyboardDecision {
-  if (context.shiftEnterMode === 'win32-input-mode') {
-    // Let xterm's textarea/composition pipeline handle IME process keys so
-    // win32-input-mode does not send raw phonetic keystrokes before commit.
-    if (isImeCompositionKeyboardEvent(event)) {
-      return { type: 'allow-default' };
-    }
+  // Text input must stay on xterm/browser's textarea + IME path. Enhanced
+  // keyboard encoders should only handle keys that cannot produce text.
+  if (isImeCompositionKeyboardEvent(event) || isCommittedImeTextKeypress(event)) {
+    return { type: 'allow-default' };
+  }
 
+  if (event.type === 'keypress' && shouldBypassKeyboardEncodingForTextKey(event)) {
+    return { type: 'allow-default' };
+  }
+
+  if (event.type === 'keydown' && shouldBypassKeyboardEncodingForTextKey(event)) {
+    return { type: 'bypass-xterm-text-input' };
+  }
+
+  if (context.shiftEnterMode === 'win32-input-mode') {
     if (event.type === 'keypress') {
       return { type: 'block-default' };
     }
@@ -201,6 +224,8 @@ export class EnhancedKeyboardProtocol {
         return false;
       case 'block-default':
         event.preventDefault?.();
+        return false;
+      case 'bypass-xterm-text-input':
         return false;
       case 'send-input':
         event.preventDefault?.();

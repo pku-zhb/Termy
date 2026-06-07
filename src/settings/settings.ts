@@ -95,13 +95,11 @@ export interface TerminalSettings {
   // When true, hide AI launchers whose underlying CLI was not found on PATH.
   // Default false so a fresh install still shows install guidance for every
   // built-in launcher; experienced users can flip this to declutter their menu.
-  hideUnavailableAiLaunchers: boolean;
 
   // When true, Termy queries the npm registry / GitHub Releases API to find
   // out whether a newer version of each AI launcher CLI is available.
   // Default false because it introduces outbound traffic that the README
   // and AGENTS.md disclose only when the user opts in.
-  checkAiLauncherUpdates: boolean;
 
   // Latest version whose changelog modal has already been shown
   lastSeenChangelogVersion: string;
@@ -285,8 +283,6 @@ export const DEFAULT_TERMINAL_SETTINGS: TerminalSettings = {
   },
   serverConnection: { ...DEFAULT_SERVER_CONNECTION_SETTINGS },
   presetScripts: [...DEFAULT_PRESET_SCRIPTS],
-  hideUnavailableAiLaunchers: false,
-  checkAiLauncherUpdates: true,
   lastSeenChangelogVersion: '',
   enableDebugLog: false,
 };

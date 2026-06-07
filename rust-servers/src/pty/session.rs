@@ -156,75 +156,22 @@ impl PtyWriter {
     }
 }
 
-/// 读取 fd 对应 PTY 的前台进程名 + 完整命令行（macOS，内核级前台进程组）
+/// Read the foreground process name for the PTY fd without reading argv.
 #[cfg(target_os = "macos")]
 pub fn foreground_process(fd: i32) -> Option<(String, String)> {
     let pgid = unsafe { libc::tcgetpgrp(fd) };
     if pgid <= 0 {
         return None;
     }
-    // 不用 libproc::proc_pid::name —— 它对某些进程（如 claude）会在 FFI 层崩溃，
-    // 拖垮整个轮询 task。改从命令行 argv[0] 取 basename 作为进程名：更稳，
-    // 且能区分 node 包装的 claude/codex。
-    let cmdline = fg_cmdline(pgid)?;
-    let name = cmdline
-        .split(' ')
-        .next()
-        .map(|arg0| arg0.rsplit('/').next().unwrap_or(arg0).to_string())
-        .unwrap_or_default();
-    Some((name, cmdline))
-}
 
-/// 读取进程完整命令行 argv（macOS KERN_PROCARGS2，ps 同款机制）
-#[cfg(target_os = "macos")]
-fn fg_cmdline(pid: i32) -> Option<String> {
-    let mut mib = [libc::CTL_KERN, libc::KERN_PROCARGS2, pid];
-    let mut size: libc::size_t = 0;
-    unsafe {
-        if libc::sysctl(mib.as_mut_ptr(), 3, std::ptr::null_mut(), &mut size, std::ptr::null_mut(), 0) != 0
-            || size == 0
-        {
-            return None;
-        }
-        let mut buf = vec![0u8; size];
-        if libc::sysctl(
-            mib.as_mut_ptr(),
-            3,
-            buf.as_mut_ptr() as *mut libc::c_void,
-            &mut size,
-            std::ptr::null_mut(),
-            0,
-        ) != 0
-        {
-            return None;
-        }
-        if size < 4 {
-            return None;
-        }
-        let argc = i32::from_ne_bytes([buf[0], buf[1], buf[2], buf[3]]);
-        let mut idx = 4usize;
-        while idx < size && buf[idx] != 0 {
-            idx += 1;
-        } // 跳过 exec path
-        while idx < size && buf[idx] == 0 {
-            idx += 1;
-        } // 跳过填充 null
-        let mut args = Vec::new();
-        for _ in 0..argc {
-            let start = idx;
-            while idx < size && buf[idx] != 0 {
-                idx += 1;
-            }
-            if start < idx {
-                args.push(String::from_utf8_lossy(&buf[start..idx]).into_owned());
-            }
-            idx += 1;
-            if idx >= size {
-                break;
-            }
-        }
-        Some(args.join(" "))
-    }
+    let path = libproc::proc_pid::pidpath(pgid).ok()?;
+    let name = std::path::Path::new(&path)
+        .file_name()
+        .map(|value| value.to_string_lossy().into_owned())
+        .filter(|value| !value.is_empty())
+        .unwrap_or(path);
+
+    Some((name.clone(), name))
 }
 
 #[cfg(not(target_os = "macos"))]

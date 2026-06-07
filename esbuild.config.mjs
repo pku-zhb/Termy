@@ -36,6 +36,7 @@ const context = await esbuild.context({
 	loader: {
 		'.md': 'text',
 		'.svg': 'text',
+		'.png': 'dataurl',
 	},
 	external: [
 		'obsidian',
