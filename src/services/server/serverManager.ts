@@ -27,10 +27,7 @@ import {
   ServerManagerError
 } from './types';
 import { PtyClient } from './ptyClient';
-import { BinaryDownloader } from './binaryDownloader';
-import type { BinaryDownloadConfig } from './binaryDownloadUrls';
 
-type BinaryUpdateResult = 'skipped-offline' | 'already-ready' | 'downloaded' | 'updated';
 const DEV_RELOAD_REQUEST_FILE = '.termy-dev-reload.json';
 const DEV_RELOAD_PHASE_INSTALLING = 'installing';
 
@@ -76,12 +73,6 @@ export class ServerManager {
   /** Debug mode (controls logging output only) */
   private debugMode: boolean;
   
-  /** Offline mode (skips version checks and automatic downloads) */
-  private offlineMode: boolean;
-  
-  /** Binary downloader */
-  private binaryDownloader: BinaryDownloader;
-  
   /** Server process */
   private process: ChildProcess | null = null;
   
@@ -121,9 +112,6 @@ export class ServerManager {
   /** WebSocket connection Promise */
   private wsConnectPromise: Promise<void> | null = null;
 
-  /** Binary update Promise */
-  private binaryUpdatePromise: Promise<BinaryUpdateResult> | null = null;
-  
   /** Event listeners */
   private eventListeners: Map<keyof ServerEvents, Set<EventListener<keyof ServerEvents>>> = new Map();
   
@@ -144,18 +132,14 @@ export class ServerManager {
   constructor(
     pluginDir: string,
     version: string = '0.0.0',
-    downloadConfig: BinaryDownloadConfig,
     debugMode: boolean = false,
-    offlineMode: boolean = false
   ) {
     this.pluginDir = pluginDir;
     this.version = version;
     this.debugMode = debugMode;
-    this.offlineMode = offlineMode;
     this.fs = window.require('fs') as FsModule;
     this.path = window.require('path') as PathModule;
     this.spawn = (window.require('child_process') as ChildProcessModule).spawn;
-    this.binaryDownloader = new BinaryDownloader(pluginDir, version, downloadConfig);
   }
 
   // ============================================================================
@@ -181,17 +165,6 @@ export class ServerManager {
     // Start the server
     this.serverStartPromise = this.startServer();
     return this.serverStartPromise;
-  }
-
-  /**
-   * Ensure the binary has been updated (without starting the server)
-   */
-  async ensureBinaryUpdated(): Promise<BinaryUpdateResult> {
-    if (this.offlineMode) {
-      debugLog('[ServerManager] 离线模式已开启，跳过二进制版本检查与下载');
-      return 'skipped-offline';
-    }
-    return this.ensureBinaryReady();
   }
 
   /**
@@ -343,9 +316,7 @@ export class ServerManager {
       debugLog('[ServerManager] 启动统一服务器...');
       
       const binaryPath = this.getBinaryPath();
-      
-      await this.ensureBinaryReady();
-      
+
       // Ensure executable permission (Unix)
       await this.ensureExecutable(binaryPath);
       
@@ -408,111 +379,6 @@ export class ServerManager {
     return this.path.join(home, '.cargo', 'bin', `termy-server${ext}`);
   }
 
-  private async ensureBinaryReady(): Promise<BinaryUpdateResult> {
-    if (this.offlineMode) {
-      const binaryPath = this.getBinaryPath();
-      if (!this.fs.existsSync(binaryPath)) {
-        throw new ServerManagerError(
-          ServerErrorCode.BINARY_NOT_FOUND,
-          '离线模式已开启，未进行版本检查与下载，请确保服务器二进制已存在'
-        );
-      }
-      return 'skipped-offline';
-    }
-    
-    if (this.binaryUpdatePromise) {
-      return this.binaryUpdatePromise;
-    }
-
-    this.binaryUpdatePromise = this.performBinaryUpdate();
-
-    try {
-      return await this.binaryUpdatePromise;
-    } finally {
-      this.binaryUpdatePromise = null;
-    }
-  }
-
-  private async performBinaryUpdate(): Promise<BinaryUpdateResult> {
-    const skipVersionCheck = this.offlineMode;
-    const needsDownload = !this.binaryDownloader.binaryExists(skipVersionCheck);
-    const needsUpdate = this.binaryDownloader.needsUpdate(skipVersionCheck);
-    const binaryPath = this.getBinaryPath();
-    const downloadConfig = this.binaryDownloader.getDownloadConfig();
-
-    debugLog('[ServerManager] Binary readiness check:', {
-      binaryPath,
-      needsDownload,
-      needsUpdate,
-      offlineMode: this.offlineMode,
-      downloadSource: downloadConfig.source,
-      serverRunning: this.isServerRunning(),
-    });
-
-    if (!needsDownload && !needsUpdate) {
-      debugLog('[ServerManager] 二进制文件已是最新，无需下载');
-      return 'already-ready';
-    }
-
-    const shouldRestart = needsUpdate && this.isServerRunning();
-    if (shouldRestart) {
-      debugLog('[ServerManager] 服务器运行中，更新前先停止服务器');
-      await this.shutdown();
-    }
-
-    const messageKey = needsUpdate ? 'notices.updatingBinary' : 'notices.downloadingBinary';
-    const defaultMessage = needsUpdate ? '正在更新服务器组件...' : '正在下载服务器组件...';
-
-    debugLog(`[ServerManager] ${needsUpdate ? '二进制文件需要更新' : '二进制文件不存在'}，开始下载...`);
-
-    const notice = new Notice(
-      t(messageKey) || defaultMessage,
-      0
-    );
-
-    let updateSucceeded = false;
-
-    try {
-      await this.binaryDownloader.download((progress) => {
-        if (progress.stage === 'downloading') {
-          notice.setMessage(
-            `${t(messageKey) || defaultMessage} ${Math.round(progress.percent)}%`
-          );
-        } else if (progress.stage === 'verifying') {
-          notice.setMessage(t('notices.verifyingBinary') || '正在验证文件...');
-        }
-      });
-
-      notice.hide();
-      const completeKey = needsUpdate ? 'notices.binaryUpdateComplete' : 'notices.binaryDownloadComplete';
-      const completeMessage = needsUpdate ? '服务器组件更新完成' : '服务器组件下载完成';
-      new Notice(t(completeKey) || completeMessage, 3000);
-      updateSucceeded = true;
-      return needsUpdate ? 'updated' : 'downloaded';
-
-    } catch (downloadError) {
-      notice.hide();
-      throw new ServerManagerError(
-        ServerErrorCode.BINARY_NOT_FOUND,
-        `下载二进制文件失败: ${downloadError instanceof Error ? downloadError.message : String(downloadError)}`
-      );
-    } finally {
-      if (shouldRestart) {
-        this.resetShutdownState();
-        if (updateSucceeded) {
-          window.setTimeout(() => {
-            this.ensureServer().catch((error) => {
-              errorLog('[ServerManager] 更新后重启服务器失败:', error);
-            });
-          }, 0);
-        }
-      }
-    }
-  }
-
-  /**
-   * Ensure the file is executable (Unix)
-   */
   private async ensureExecutable(filePath: string): Promise<void> {
     if (process.platform === 'win32') {
       return;
@@ -1052,29 +918,5 @@ export class ServerManager {
     }
     this.debugMode = debugMode;
     debugLog('[ServerManager] 更新调试模式:', this.debugMode);
-  }
-  
-  updateOfflineMode(offlineMode: boolean): void {
-    if (this.offlineMode === offlineMode) {
-      return;
-    }
-    this.offlineMode = offlineMode;
-    debugLog('[ServerManager] 更新离线模式:', this.offlineMode);
-  }
-
-  updateBinaryDownloadConfig(downloadConfig: BinaryDownloadConfig): void {
-    const currentConfig = this.binaryDownloader?.getDownloadConfig?.();
-    const nextConfig: BinaryDownloadConfig = {
-      source: downloadConfig.source,
-    };
-
-    if (
-      currentConfig
-      && currentConfig.source === nextConfig.source
-    ) {
-      return;
-    }
-    this.binaryDownloader = new BinaryDownloader(this.pluginDir, this.version, nextConfig);
-    debugLog('[ServerManager] 更新二进制下载配置:', nextConfig);
   }
 }

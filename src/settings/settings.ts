@@ -86,9 +86,6 @@ export interface TerminalSettings {
   // Feature visibility settings
   visibility: VisibilityConfig;
 
-  // Server connection settings
-  serverConnection: ServerConnectionSettings;
-
   // Preset scripts
   presetScripts: PresetScript[];
 
@@ -112,8 +109,6 @@ export interface TerminalSettings {
  * Workflow action type
  */
 export type PresetWorkflowActionType = 'terminal-command' | 'obsidian-command' | 'open-external';
-
-export type BinaryDownloadSource = 'github-release' | 'cloudflare-r2';
 
 /**
  * Workflow action definition
@@ -141,22 +136,6 @@ export interface PresetScript {
   autoOpenTerminal: boolean;
   runInNewTerminal: boolean;
 }
-
-/**
- * Server connection settings
- */
-export interface ServerConnectionSettings {
-  binaryDownloadSource: BinaryDownloadSource;
-  offlineMode: boolean;
-}
-
-/**
- * Default server connection settings
- */
-export const DEFAULT_SERVER_CONNECTION_SETTINGS: ServerConnectionSettings = {
-  binaryDownloadSource: 'github-release',
-  offlineMode: false,
-};
 
 /**
  * Default preset scripts
@@ -281,7 +260,6 @@ export const DEFAULT_TERMINAL_SETTINGS: TerminalSettings = {
     showInNewTab: true,
     showInStatusBar: false,
   },
-  serverConnection: { ...DEFAULT_SERVER_CONNECTION_SETTINGS },
   presetScripts: [...DEFAULT_PRESET_SCRIPTS],
   lastSeenChangelogVersion: '',
   enableDebugLog: false,

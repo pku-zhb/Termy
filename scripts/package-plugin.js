@@ -15,33 +15,9 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Termy server configuration
-const SERVER_CONFIG = {
-  name: 'termy-server',
-  displayName: 'Termy Server'
-};
-
-// Parse command line arguments
-const args = process.argv.slice(2);
-const createZip = args.includes('--zip');
-
-// Detect current platform
-function getCurrentPlatform() {
-  const platform = process.platform;
-  const arch = process.arch;
-  return `${platform}-${arch}`;
-}
-
-const currentPlatform = getCurrentPlatform();
-
-console.log('📦 Plugin Package Script');
-console.log(`🔍 Current platform: ${currentPlatform}`);
-console.log('');
-
-// Project paths
 const ROOT_DIR = path.join(__dirname, '..');
-const BINARIES_DIR = path.join(ROOT_DIR, 'binaries');
 const PACKAGE_DIR = path.join(ROOT_DIR, 'plugin-package');
+const createZip = process.argv.includes('--zip');
 
 // 1. Check required files
 console.log('🔍 Checking required files...');
@@ -63,23 +39,6 @@ for (const file of packageFiles) {
 console.log('✅ All required files exist');
 console.log('');
 
-// 2. Check binary file for current platform
-console.log('🔍 Checking binary file...');
-
-const ext = currentPlatform.startsWith('win32') ? '.exe' : '';
-const binaryName = `${SERVER_CONFIG.name}-${currentPlatform}${ext}`;
-const binaryPath = path.join(BINARIES_DIR, binaryName);
-
-if (!fs.existsSync(binaryPath)) {
-  console.error(`  ❌ Missing: ${binaryName}`);
-  console.error('');
-  console.error('Please run: node scripts/build-rust.js');
-  process.exit(1);
-}
-
-const binaryStats = fs.statSync(binaryPath);
-const binarySizeMB = (binaryStats.size / 1024 / 1024).toFixed(2);
-console.log(`  ✓ ${binaryName} (${binarySizeMB} MB)`);
 console.log('');
 
 // 3. Clean and create package directory
@@ -87,7 +46,6 @@ if (fs.existsSync(PACKAGE_DIR)) {
   fs.rmSync(PACKAGE_DIR, { recursive: true, force: true });
 }
 fs.mkdirSync(PACKAGE_DIR, { recursive: true });
-fs.mkdirSync(path.join(PACKAGE_DIR, 'binaries'), { recursive: true });
 
 console.log('📋 Copying files to package directory...');
 
@@ -99,31 +57,8 @@ for (const file of packageFiles) {
   console.log(`  ✓ ${file}`);
 }
 
-// 5. Copy binary file
-const destBinaryPath = path.join(PACKAGE_DIR, 'binaries', binaryName);
-fs.copyFileSync(binaryPath, destBinaryPath);
-
-console.log(`  ✓ binaries/${binaryName}`);
 console.log('');
 
-// 6. Calculate package size
-console.log('📊 Package size statistics...');
-let totalSize = 0;
-
-for (const file of packageFiles) {
-  const filePath = path.join(PACKAGE_DIR, file);
-  const stats = fs.statSync(filePath);
-  totalSize += stats.size;
-  const sizeKB = (stats.size / 1024).toFixed(1);
-  console.log(`  ${file}: ${sizeKB} KB`);
-}
-
-totalSize += binaryStats.size;
-console.log(`  binaries/${binaryName}: ${binarySizeMB} MB`);
-
-const totalSizeMB = (totalSize / 1024 / 1024).toFixed(2);
-console.log(`  Total: ${totalSizeMB} MB`);
-console.log('');
 
 // 7. Create ZIP if requested
 if (createZip) {

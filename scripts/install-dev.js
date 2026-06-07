@@ -7,10 +7,6 @@
  *
  * Options:
  *   --kill      Close and restart Obsidian
- *   --no-build  Skip the TypeScript/esbuild plugin build (`pnpm build`)
- *   --no-rust   Skip the native PTY server build (`pnpm build:rust`).
- *               Useful when only the TypeScript layer changed and the
- *               existing `binaries/<termy-server>` is still up to date.
  *   --reset     Reset saved configuration
  */
 
@@ -33,7 +29,6 @@ const CONFIG_FILE = path.join(ROOT_DIR, '.dev-install-config.json');
 const args = process.argv.slice(2);
 const KILL_OBSIDIAN = args.includes('--kill');
 const SKIP_BUILD = args.includes('--no-build');
-const SKIP_RUST = args.includes('--no-rust');
 const RESET_CONFIG = args.includes('--reset');
 
 // Get vault path from first non-flag argument
@@ -334,29 +329,6 @@ async function main() {
   } else {
     log('Skipping plugin build (--no-build)\n', 'yellow');
   }
-
-  if (!SKIP_RUST) {
-    log('Building Rust PTY server...', 'cyan');
-    try {
-      execSync('pnpm build:rust', { cwd: ROOT_DIR, stdio: 'inherit' });
-    } catch (e) {
-      log('\nRust build failed', 'red');
-      closeReadline();
-      process.exit(1);
-    }
-    log('Rust build complete\n', 'green');
-  } else {
-    log('Skipping Rust build (--no-rust); reusing existing binaries/\n', 'yellow');
-  }
-
-  // 3. Check files
-  log('Checking files...', 'cyan');
-  const binaryName = getBinaryName();
-  const requiredFiles = [
-    'main.js',
-    'manifest.json',
-    'styles.css',
-    `binaries/${binaryName}`
   ];
 
   for (const file of requiredFiles) {
@@ -365,7 +337,7 @@ async function main() {
   }
 
   if (!requiredFiles.every(f => fs.existsSync(path.join(ROOT_DIR, f)))) {
-    log('\nMissing files. Run: pnpm build && pnpm build:rust', 'yellow');
+    log('\nMissing files. Run: pnpm build', 'yellow');
     closeReadline();
     process.exit(1);
   }
@@ -412,24 +384,6 @@ async function main() {
     const dest = path.join(targetDir, file);
     await copyFileWithRetry(src, dest);
     log(`  ${file}`, 'green');
-  }
-
-  const binariesDir = path.join(targetDir, 'binaries');
-  if (!fs.existsSync(binariesDir)) {
-    fs.mkdirSync(binariesDir, { recursive: true });
-  }
-
-  const srcBinary = path.join(ROOT_DIR, 'binaries', binaryName);
-  const destBinary = path.join(binariesDir, binaryName);
-  await copyFileWithRetry(srcBinary, destBinary, 3, async () => {
-    const killedBusyProcesses = killTermyProcesses();
-    if (killedBusyProcesses) {
-      log('  Retrying after stopping Termy processes holding the binary lock', 'yellow');
-      await sleep(500);
-    }
-  });
-  log(`  binaries/${binaryName}`, 'green');
-  log('');
 
   // 6. Restart Obsidian
   if (KILL_OBSIDIAN) {

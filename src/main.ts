@@ -56,17 +56,11 @@ export default class TerminalPlugin extends Plugin {
       
       const pluginDir = this.getPluginDir();
       const version = this.manifest.version;
-      const binaryDownloadConfig = {
-        source: this.settings.serverConnection?.binaryDownloadSource ?? 'github-release',
-      };
-      const offlineMode = this.settings.serverConnection?.offlineMode ?? false;
       
       this._serverManager = new ServerManager(
         pluginDir,
         version,
-        binaryDownloadConfig,
-        this.settings.enableDebugLog,
-        offlineMode
+        this.settings.enableDebugLog
       );
       
       debugLog('[TerminalPlugin] ServerManager initialized');
@@ -202,8 +196,6 @@ export default class TerminalPlugin extends Plugin {
         ...DEFAULT_TERMINAL_SETTINGS.visibility,
         ...loaded?.visibility,
       },
-      // Ensure the serverConnection config exists
-      serverConnection: this.normalizeServerConnectionSettings(loaded?.serverConnection),
       // Ensure the presetScripts config exists
       presetScripts: normalizedPresetScripts,
     };
@@ -214,7 +206,6 @@ export default class TerminalPlugin extends Plugin {
    */
   async saveSettings() {
     this.settings.presetScripts = this.normalizePresetScripts(this.settings.presetScripts);
-    this.settings.serverConnection = this.normalizeServerConnectionSettings(this.settings.serverConnection);
     await this.saveData(this.settings);
     
     // Update debug mode
@@ -224,10 +215,6 @@ export default class TerminalPlugin extends Plugin {
     // Update the ServerManager configuration
     if (this._serverManager) {
       this._serverManager.updateDebugMode(this.settings.enableDebugLog);
-      this._serverManager.updateOfflineMode(this.settings.serverConnection.offlineMode);
-      this._serverManager.updateBinaryDownloadConfig({
-        source: this.settings.serverConnection.binaryDownloadSource,
-      });
     }
 
     // Update terminal service settings
@@ -268,20 +255,6 @@ export default class TerminalPlugin extends Plugin {
     };
   }
 
-  private normalizeServerConnectionSettings(
-    serverConnection: Partial<TerminalSettings['serverConnection']> | null | undefined
-  ): TerminalSettings['serverConnection'] {
-    return {
-      ...DEFAULT_TERMINAL_SETTINGS.serverConnection,
-      ...serverConnection,
-      binaryDownloadSource: 'github-release',
-      offlineMode: Boolean(serverConnection?.offlineMode),
-    };
-  }
-
-  /**
-   * Register feature visibility configuration
-   */
   private registerFeatureVisibility(): void {
     this.featureVisibilityManager.registerFeature({
       id: 'terminal',

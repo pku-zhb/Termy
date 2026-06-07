@@ -227,7 +227,7 @@ graph LR
 - **Frontend**: TypeScript, Obsidian plugin APIs, and xterm.js.
 - **Backend**: Native Rust PTY server built on `portable-pty`.
 - **AI context**: Claude Code and OpenCode integrate through the IDE bridge; Codex integrates through a vault-local Skill.
-- **Packaging**: Generated plugin assets are emitted as `main.js` and `styles.css`; native binaries are copied to `binaries/`.
+- **Packaging**: Generated plugin assets are emitted as `main.js` and `styles.css`; the native server is distributed separately as an external `termy-server` CLI.
 
 ## License
 

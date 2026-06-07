@@ -6,11 +6,10 @@
 import type { App, ColorComponent, TextComponent } from 'obsidian';
 import { Modal, Setting, Notice, Platform, ToggleComponent, setIcon } from 'obsidian';
 import type { RendererContext } from '../types';
-import type { BinaryDownloadSource, PresetScript, ShellType } from '../settings';
+import type { PresetScript, ShellType } from '../settings';
 
 import { 
   DEFAULT_PRESET_SCRIPTS,
-  DEFAULT_SERVER_CONNECTION_SETTINGS,
   getCurrentPlatformShell, 
   setCurrentPlatformShell, 
   getCurrentPlatformCustomShellPath, 
@@ -186,9 +185,6 @@ export class TerminalSettingsRenderer extends BaseSettingsRenderer {
 
     // Behavior settings card
     this.renderBehaviorSettings(containerEl);
-
-    // Server connection settings card
-    this.renderServerConnectionSettings(containerEl);
 
     // Feature visibility settings card
     this.renderVisibilitySettings(containerEl);
@@ -1481,138 +1477,6 @@ export class TerminalSettingsRenderer extends BaseSettingsRenderer {
               ? t('notices.settings.debugLogEnabled')
               : t('notices.settings.debugLogDisabled'));
           });
-        }));
-  }
-
-  /**
-   * Render server connection settings
-   */
-  private renderServerConnectionSettings(containerEl: HTMLElement): void {
-    const connectionCard = containerEl.createDiv({ cls: 'settings-card' });
-
-    new Setting(connectionCard)
-      .setName(t('settingsDetails.advanced.serverConnection'))
-      .setDesc(t('settingsDetails.advanced.serverConnectionDesc'))
-      .setHeading();
-
-    // Render the settings content in a conditional section so it can refresh after reset
-    this.toggleConditionalSection(
-      connectionCard,
-      'server-connection-settings',
-      true,
-      (el) => this.renderServerConnectionContent(el)
-    );
-  }
-
-  /**
-   * Render server connection settings content
-   */
-  private renderServerConnectionContent(containerEl: HTMLElement): void {
-    const settings = this.context.plugin.settings;
-
-    // Binary download source
-    new Setting(containerEl)
-      .setName(t('settingsDetails.advanced.binaryDownloadSource'))
-      .setDesc(t('settingsDetails.advanced.binaryDownloadSourceDesc'))
-      .addDropdown((dropdown) => {
-        dropdown.addOption(
-          'github-release',
-          t('settingsDetails.advanced.binaryDownloadSourceGithubRelease')
-        );
-        dropdown
-          .setValue(settings.serverConnection.binaryDownloadSource)
-          .onChange((value) => {
-            settings.serverConnection.binaryDownloadSource = value as BinaryDownloadSource;
-            void this.saveSettings();
-
-            void this.context.plugin.getServerManager()
-              .then((serverManager) => {
-                serverManager.updateBinaryDownloadConfig({
-                  source: settings.serverConnection.binaryDownloadSource,
-                });
-              })
-              .catch(() => {
-                // ServerManager may not be initialized yet
-              });
-          });
-      })
-      .addButton((button) => {
-        button
-          .setButtonText(t('settingsDetails.advanced.binaryDownloadNow'))
-          .onClick(async () => {
-            button.setDisabled(true);
-            button.setButtonText(t('settingsDetails.advanced.binaryDownloadNowRunning'));
-
-            try {
-              const serverManager = await this.context.plugin.getServerManager();
-              serverManager.updateBinaryDownloadConfig({
-                source: settings.serverConnection.binaryDownloadSource,
-              });
-
-              const result = await serverManager.ensureBinaryUpdated();
-              if (result === 'already-ready') {
-                new Notice(t('notices.settings.binaryAlreadyUpToDate'));
-              } else if (result === 'skipped-offline') {
-                new Notice(t('notices.settings.binaryDownloadSkippedOffline'));
-              }
-            } catch (error) {
-              const message = error instanceof Error ? error.message : String(error);
-              new Notice(t('notices.settings.binaryDownloadFailed', { message }), 5000);
-            } finally {
-              button.setButtonText(t('settingsDetails.advanced.binaryDownloadNow'));
-              button.setDisabled(false);
-            }
-          });
-      });
-
-    // Offline mode
-    new Setting(containerEl)
-      .setName(t('settingsDetails.advanced.offlineMode'))
-      .setDesc(t('settingsDetails.advanced.offlineModeDesc'))
-      .addToggle(toggle => toggle
-        .setValue(settings.serverConnection.offlineMode)
-        .onChange((value) => {
-          settings.serverConnection.offlineMode = value;
-          void this.saveSettings();
-
-          void this.context.plugin.getServerManager()
-            .then((serverManager) => {
-              serverManager.updateOfflineMode(value);
-            })
-            .catch(() => {
-              // ServerManager may not be initialized yet
-            });
-        }));
-
-    // Reset button
-    new Setting(containerEl)
-      .setName(t('settingsDetails.advanced.resetToDefaults'))
-      .setDesc(t('settingsDetails.advanced.resetToDefaultsDesc'))
-      .addButton(button => button
-        .setButtonText(t('common.reset'))
-        .onClick(() => {
-          this.context.plugin.settings.serverConnection = { ...DEFAULT_SERVER_CONNECTION_SETTINGS };
-          void this.saveSettings();
-
-          // The default ships offline mode off, so the suppression hint
-          // in the preset-scripts card needs to disappear after reset.
-
-          void this.context.plugin.getServerManager()
-            .then((serverManager) => {
-              serverManager.updateOfflineMode(this.context.plugin.settings.serverConnection.offlineMode);
-              serverManager.updateBinaryDownloadConfig({
-                source: this.context.plugin.settings.serverConnection.binaryDownloadSource,
-              });
-            })
-            .catch(() => {
-              // ServerManager may not be initialized yet
-            });
-
-          const parentCard = containerEl.parentElement;
-          if (parentCard) {
-            this.toggleConditionalSection(parentCard, 'server-connection-settings', false, () => {});
-            this.toggleConditionalSection(parentCard, 'server-connection-settings', true, (el) => this.renderServerConnectionContent(el));
-          }
         }));
   }
 }

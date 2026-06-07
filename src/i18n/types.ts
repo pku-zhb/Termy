@@ -123,14 +123,7 @@ export interface TranslationKeys {
     serverRestartFailed: string;
     wsReconnectFailed: string;
     wsReconnectSuccess: string;
-    downloadingBinary: string;
-    updatingBinary: string;
-    verifyingBinary: string;
-    binaryDownloadComplete: string;
-    binaryUpdateComplete: string;
-    binaryNotAvailable: string;
     checksumMismatch: string;
-    binaryInUse: string;
     terminal: {
       serverCrashed: string;
       sessionClosed: string;
@@ -157,8 +150,6 @@ export interface TranslationKeys {
       scrollbackRangeError: string;
       heightRangeError: string;
       binaryAlreadyUpToDate: string;
-      binaryDownloadSkippedOffline: string;
-      binaryDownloadFailed: string;
     };
     presetScript: {
       notFound: string;
@@ -298,18 +289,7 @@ export interface TranslationKeys {
       performanceAndDebug: string;
       debugMode: string;
       debugModeDesc: string;
-      serverConnection: string;
-      serverConnectionDesc: string;
       contextAwareness: string;
-      offlineMode: string;
-      offlineModeDesc: string;
-      binaryDownloadSource: string;
-      binaryDownloadSourceDesc: string;
-      binaryDownloadSourceGithubRelease: string;
-      binaryDownloadSourceCloudflareR2: string;
-      binaryDownloadNow: string;
-      binaryDownloadNowDesc: string;
-      binaryDownloadNowRunning: string;
       resetToDefaults: string;
       resetToDefaultsDesc: string;
       customServerPort: string;
