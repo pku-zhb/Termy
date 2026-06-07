@@ -54,3 +54,7 @@ Commit subjects must start with a Conventional Commit type such as `feat:`, `fix
 - Technical terms can remain in English, but Chinese explanations must be provided.
 - Code comments must be in English.
 - Configuration file content language should be determined based on actual needs.
+
+## Local Source Links
+
+- When citing local files or sources to the user, prefer clickable `file://` absolute paths so they can be opened directly from Termy. Preserve raw spaces when readable, and append line numbers as `#L<line>` when useful, for example `file:///Users/example/Documents/Notes/Example.md#L12`.
