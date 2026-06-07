@@ -156,7 +156,7 @@ export interface ServerConnectionSettings {
  * Default server connection settings
  */
 export const DEFAULT_SERVER_CONNECTION_SETTINGS: ServerConnectionSettings = {
-  binaryDownloadSource: 'cloudflare-r2',
+  binaryDownloadSource: 'github-release',
   offlineMode: false,
 };
 
