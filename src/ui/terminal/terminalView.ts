@@ -1,5 +1,5 @@
 import type { WorkspaceLeaf, Menu } from 'obsidian';
-import { FileSystemAdapter, ItemView, MarkdownView, Notice, TFile, TFolder, setIcon } from 'obsidian';
+import { FileSystemAdapter, ItemView, MarkdownView, Notice, Scope, TFile, TFolder, setIcon } from 'obsidian';
 import { shell, webUtils } from 'electron';
 
 /**
@@ -141,6 +141,14 @@ export class TerminalView extends ItemView {
     this.terminalService = terminalService;
     this.fs = window.require('fs') as FsModule;
     this.path = window.require('path') as PathModule;
+
+    // 终端 view 聚焦时声明独占 Esc：Obsidian 在自己的 keymap 动作前会先查 view 的 scope，
+    // 这样它默认的「Esc 退回编辑器」就不会抢走焦点。回调不 preventDefault，Esc 仍会继续
+    // 传到 xterm 发给 PTY（vim/claude 里的 Esc 照常工作）。其它键经 parent scope 透传给 Obsidian。
+    this.scope = new Scope(this.app.scope);
+    this.scope.register([], 'Escape', () => {
+      // 仅"认领" Esc 以压制 Obsidian 默认行为；返回 undefined 避免 preventDefault。
+    });
     this.detachLeafWithoutConfirmation = leaf.detach.bind(leaf) as WorkspaceLeaf['detach'];
     leaf.detach = () => {
       void this.detachLeafWithConfirmation();
