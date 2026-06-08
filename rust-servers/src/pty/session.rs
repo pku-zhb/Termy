@@ -125,12 +125,23 @@ impl PtySession {
         Ok(())
     }
     
-    /// Terminate the child process
+    /// Terminate the child process and reap it to avoid a zombie.
     pub fn kill(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         if let Ok(mut child) = self.child.lock() {
-            child.kill()?;
+            // 进程可能已自行退出，kill 失败可忽略；关键是随后 wait 回收僵尸。
+            let _ = child.kill();
+            // SIGKILL 后进程立即结束，wait 几乎立刻返回，回收 PID 避免 <defunct> 堆积。
+            let _ = child.wait();
         }
         Ok(())
+    }
+
+    /// Reap an already-exited child (用于 read task 检测到 EOF、shell 自行退出时)。
+    /// EOF 意味着进程已退出，wait 立即返回。
+    pub fn reap(&mut self) {
+        if let Ok(mut child) = self.child.lock() {
+            let _ = child.wait();
+        }
     }
 
     /// 返回 PTY master 的 raw fd（用于读前台进程组，方案 A）
@@ -156,22 +167,81 @@ impl PtyWriter {
     }
 }
 
-/// Read the foreground process name for the PTY fd without reading argv.
+/// 读取 fd 对应 PTY 的前台进程名 + 完整命令行（macOS，内核级前台进程组）。
+///
+/// 返回 (name, cmdline)：
+/// - name    = argv[0] 的 basename（如 claude、codex、node、tmux、ssh）
+/// - cmdline = 完整命令行（前端据此区分 node 包装的 claude/codex —— argv[0] 是 node，
+///   但 cmdline 里含 codex.js / claude 路径）
+///
+/// 用 KERN_PROCARGS2 读 argv，而非 libproc::pidpath（只拿可执行名，认不出 node 包装的 CLI，
+/// 也认不出 claude.exe），更非 libproc::proc_pid::name（对 claude 进程会 FFI 层段错误）。
 #[cfg(target_os = "macos")]
 pub fn foreground_process(fd: i32) -> Option<(String, String)> {
     let pgid = unsafe { libc::tcgetpgrp(fd) };
     if pgid <= 0 {
         return None;
     }
+    let cmdline = fg_cmdline(pgid)?;
+    let name = cmdline
+        .split(' ')
+        .next()
+        .map(|arg0| arg0.rsplit('/').next().unwrap_or(arg0).to_string())
+        .unwrap_or_default();
+    Some((name, cmdline))
+}
 
-    let path = libproc::proc_pid::pidpath(pgid).ok()?;
-    let name = std::path::Path::new(&path)
-        .file_name()
-        .map(|value| value.to_string_lossy().into_owned())
-        .filter(|value| !value.is_empty())
-        .unwrap_or(path);
-
-    Some((name.clone(), name))
+/// 读取进程完整命令行 argv（macOS KERN_PROCARGS2，ps 同款机制）。
+/// 全程对缓冲区做 `idx < size` 边界检查，from_utf8_lossy 不 panic。
+#[cfg(target_os = "macos")]
+fn fg_cmdline(pid: i32) -> Option<String> {
+    let mut mib = [libc::CTL_KERN, libc::KERN_PROCARGS2, pid];
+    let mut size: libc::size_t = 0;
+    unsafe {
+        if libc::sysctl(mib.as_mut_ptr(), 3, std::ptr::null_mut(), &mut size, std::ptr::null_mut(), 0) != 0
+            || size == 0
+        {
+            return None;
+        }
+        let mut buf = vec![0u8; size];
+        if libc::sysctl(
+            mib.as_mut_ptr(),
+            3,
+            buf.as_mut_ptr() as *mut libc::c_void,
+            &mut size,
+            std::ptr::null_mut(),
+            0,
+        ) != 0
+        {
+            return None;
+        }
+        if size < 4 {
+            return None;
+        }
+        let argc = i32::from_ne_bytes([buf[0], buf[1], buf[2], buf[3]]);
+        let mut idx = 4usize;
+        while idx < size && buf[idx] != 0 {
+            idx += 1;
+        } // 跳过 exec path
+        while idx < size && buf[idx] == 0 {
+            idx += 1;
+        } // 跳过填充 null
+        let mut args = Vec::new();
+        for _ in 0..argc {
+            let start = idx;
+            while idx < size && buf[idx] != 0 {
+                idx += 1;
+            }
+            if start < idx {
+                args.push(String::from_utf8_lossy(&buf[start..idx]).into_owned());
+            }
+            idx += 1;
+            if idx >= size {
+                break;
+            }
+        }
+        Some(args.join(" "))
+    }
 }
 
 #[cfg(not(target_os = "macos"))]

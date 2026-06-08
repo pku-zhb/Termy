@@ -147,7 +147,16 @@ impl PtyHandler {
         );
         
         // Start the PTY output reader task
-        let read_task = self.start_read_task(session_id.clone(), pty_reader, pty_writer, shell_type, master_fd).await?;
+        // 传入 session 的 Arc 克隆：read task 持有它，保证 master fd 在前台进程轮询期间
+        // 始终有效（避免 fd 被关闭/复用），并在 EOF 时用它回收子进程。
+        let read_task = self.start_read_task(
+            session_id.clone(),
+            pty_reader,
+            pty_writer,
+            shell_type,
+            master_fd,
+            Arc::clone(&pty_session),
+        ).await?;
         context.read_task = Some(read_task);
         
         // Store the session context
@@ -179,6 +188,7 @@ impl PtyHandler {
         _writer: Arc<Mutex<PtyWriter>>,
         _shell_type: Option<String>,
         master_fd: Option<i32>,
+        session: Arc<TokioMutex<PtySession>>,
     ) -> Result<tokio::task::JoinHandle<()>, RouterError> {
         const OUTPUT_BATCH_INTERVAL_MS: u64 = 4;
         const READ_BUFFER_SIZE: usize = 8192;
@@ -192,6 +202,10 @@ impl PtyHandler {
         
         // Start the reader task
         let task = tokio::spawn(async move {
+            // session 在整个任务期间持有：保证 master_fd 在前台进程轮询时始终有效
+            // （PtySession 未被 drop → master 不会被关闭/复用），并用于 EOF 回收子进程。
+            let session = session;
+
             enum ReadEvent {
                 Data(Vec<u8>),
                 Eof,
@@ -360,6 +374,11 @@ impl PtyHandler {
                 if pending_exit {
                     // EOF: the process has exited
                     log_info!("PTY 输出结束: session_id={}", session_id);
+
+                    // shell 自行退出（敲 exit / 进程结束）时前端不会发 destroy，
+                    // 在此主动回收子进程，避免 <defunct> 僵尸堆积。EOF 说明进程已退出，
+                    // reap 内部的 wait 立即返回，不会阻塞。
+                    session.lock().await.reap();
 
                     // Send the exit event
                     let exit_response = ServerResponse::new(
