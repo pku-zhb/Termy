@@ -1050,6 +1050,16 @@ export class TerminalInstance {
     this.ptyClient = null;
     this.sessionId = null;
 
+    // 清空所有回调登记，避免销毁后仍强引用外部（view 层）回调而阻止 GC。
+    this.titleChangeCallbacks.clear();
+    this.searchStateCallbacks.clear();
+    this.fontSizeChangeCallbacks.clear();
+    this.rendererChangeCallbacks.clear();
+    this.contextMenuCallbacks = {};
+    this.shellEventCallback = null;
+    this.foregroundCallback = null;
+    this.tabNavCallback = null;
+
     try { this.xterm.dispose(); } catch { /* ignore */ }
   }
 
@@ -2319,6 +2329,7 @@ export class TerminalInstance {
     
     // Wait briefly for the interrupt to take effect, then send the clear command
     window.setTimeout(() => {
+      if (this.isDestroyed) return;
       const clearCommand = isWindows() ? 'cls\r' : 'clear\r';
       if (this.ptyClient && this.sessionId) {
         this.ptyClient.write(this.sessionId, clearCommand);
@@ -2339,17 +2350,19 @@ export class TerminalInstance {
     
     // Wait briefly for the interrupt to take effect
     window.setTimeout(() => {
+      // 销毁后 xterm 已 dispose，访问会抛异常，直接跳过。
+      if (this.isDestroyed) return;
       // Send the clear command to the shell
       const clearCommand = isWindows() ? 'cls\r' : 'clear\r';
       if (this.ptyClient && this.sessionId) {
         this.ptyClient.write(this.sessionId, clearCommand);
       }
-      
+
       // Clear xterm.js scrollback and state
       this.xterm.clear();
       this.xterm.reset();
       this.xterm.clearSelection();
-      
+
       debugLog('[Terminal] Buffer cleared and terminal reset');
     }, 50);
   }

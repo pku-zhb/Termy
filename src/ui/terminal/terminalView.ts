@@ -1,5 +1,5 @@
 import type { WorkspaceLeaf, Menu } from 'obsidian';
-import { FileSystemAdapter, ItemView, Notice, TFile, TFolder, setIcon } from 'obsidian';
+import { FileSystemAdapter, ItemView, MarkdownView, Notice, TFile, TFolder, setIcon } from 'obsidian';
 import { shell, webUtils } from 'electron';
 
 /**
@@ -106,10 +106,6 @@ function basenameCommand(command: string): string {
   return basename.replace(/^-+/, '');
 }
 
-export type TerminalAttachOptions = {
-  focus?: boolean;
-};
-
 /**
  * Terminal view class
  */
@@ -136,6 +132,7 @@ export class TerminalView extends ItemView {
   private readonly fs: FsModule;
   private readonly path: PathModule;
   private readonly foregroundByTerminal = new WeakMap<TerminalInstance, ForegroundInfo>();
+  private readonly closingTabs = new Set<TerminalInstance>();
   private readonly detachLeafWithoutConfirmation: WorkspaceLeaf['detach'];
   private viewCloseConfirmationPromise: Promise<boolean> | null = null;
 
@@ -347,49 +344,8 @@ export class TerminalView extends ItemView {
     this.disposeAppearanceStyle();
   }
 
-  releaseTerminalInstance(): TerminalInstance | null {
-    const terminal = this.terminalInstance;
-    if (!terminal) return null;
-
-    this.detachTerminalBindings();
-    this.fileUriLinkProvider?.dispose();
-    this.fileUriLinkProvider = null;
-    terminal.detach();
-    this.terminalInstance = null;
-    this.initPromise = Promise.resolve(terminal);
-    this.initResolve = null;
-    this.initReject = null;
-    return terminal;
-  }
-
-  adoptTerminalInstance(terminal: TerminalInstance, options: TerminalAttachOptions = {}): void {
-    this.detachTerminalBindings();
-    this.terminalInstance = terminal;
-    this.initPromise = Promise.resolve(terminal);
-    this.initResolve?.(terminal);
-    this.initResolve = null;
-    this.initReject = null;
-    this.bindTerminalInstance(terminal);
-    this.registerTerminalHyperlinkHandler(terminal.getXterm());
-    this.updateAppearanceStyles();
-    this.attachTerminalToContainer(options);
-    this.setupResizeObserver();
-    this.updateLeafHeader(this.leaf);
-    this.updateDropHintText();
-  }
-
   setTerminalService(terminalService: TerminalService): void {
     this.terminalService = terminalService;
-  }
-
-  handleHostWindowChanged(options: TerminalAttachOptions = {}): void {
-    if (!this.terminalInstance || !this.terminalContainer) return;
-
-    this.removeDropHandlers?.();
-    this.removeDropHandlers = this.setupDropHandlers();
-    this.updateAppearanceStyles();
-    this.attachTerminalToContainer(options);
-    this.setupResizeObserver();
   }
 
   /**
@@ -419,6 +375,14 @@ export class TerminalView extends ItemView {
       if (this.tabs.length === 0) {
         this.detachLeafWithoutConfirmation();
       }
+      return;
+    }
+
+    // View 可能在等待终端创建（异步）期间被关闭：onClose 已清空 tabs 并清空容器。
+    // 此时若继续挂载，会复活一个 onClose 销毁循环跑不到的终端 → 永久泄漏。
+    if (!this.terminalContainer?.isConnected) {
+      await this.terminalService?.destroyTerminal(terminal.id).catch(() => { /* ignore */ });
+      paneEl.remove();
       return;
     }
 
@@ -574,37 +538,52 @@ export class TerminalView extends ItemView {
   /**
    * 关闭指定 tab；关闭最后一个时连同关闭整个 view
    */
-  async closeTab(index: number): Promise<void> {
-    const tab = this.tabs[index];
+  async closeTab(target: number | TerminalInstance): Promise<void> {
+    // 按 tab 对象身份定位，而非渲染时捕获的下标——下标在异步确认/销毁期间会失效。
+    const tab = typeof target === 'number'
+      ? this.tabs[target]
+      : this.tabs.find((candidate) => candidate.terminal === target);
     if (!tab) return;
-    if (!(await this.confirmCloseTabIfNeeded(tab.terminal))) {
-      return;
-    }
 
+    // 防重入：双击关闭按钮、或确认期间再次触发时，同一 tab 只处理一次。
+    if (this.closingTabs.has(tab.terminal)) return;
+    this.closingTabs.add(tab.terminal);
     try {
-      await this.terminalService?.destroyTerminal(tab.terminal.id);
-    } catch (error) {
-      errorLog('[TerminalView] Destroy tab failed:', error);
-    }
-    tab.paneEl.remove();
-    this.tabs.splice(index, 1);
+      if (!(await this.confirmCloseTabIfNeeded(tab.terminal))) {
+        return;
+      }
 
-    if (this.tabs.length === 0) {
-      this.terminalInstance = null;
-      this.activeIndex = -1;
-      this.detachLeafWithoutConfirmation();
-      return;
-    }
+      try {
+        await this.terminalService?.destroyTerminal(tab.terminal.id);
+      } catch (error) {
+        errorLog('[TerminalView] Destroy tab failed:', error);
+      }
 
-    // 重新计算 active 下标
-    let next = this.activeIndex;
-    if (index < this.activeIndex) {
-      next = this.activeIndex - 1;
-    } else if (index === this.activeIndex) {
-      next = Math.min(index, this.tabs.length - 1);
+      // 异步期间数组可能已变，用对象身份重新取当前下标。
+      const index = this.tabs.indexOf(tab);
+      if (index === -1) return; // 已被并发关闭移除
+      tab.paneEl.remove();
+      this.tabs.splice(index, 1);
+
+      if (this.tabs.length === 0) {
+        this.terminalInstance = null;
+        this.activeIndex = -1;
+        this.detachLeafWithoutConfirmation();
+        return;
+      }
+
+      // 重新计算 active 下标
+      let next = this.activeIndex;
+      if (index < this.activeIndex) {
+        next = this.activeIndex - 1;
+      } else if (index === this.activeIndex) {
+        next = Math.min(index, this.tabs.length - 1);
+      }
+      this.activeIndex = -1; // 强制重新绑定
+      this.setActiveTab(Math.max(0, next));
+    } finally {
+      this.closingTabs.delete(tab.terminal);
     }
-    this.activeIndex = -1; // 强制重新绑定
-    this.setActiveTab(Math.max(0, next));
   }
 
   /**
@@ -653,7 +632,7 @@ export class TerminalView extends ItemView {
       setIcon(closeBtn, 'x');
       closeBtn.addEventListener('click', (event) => {
         event.stopPropagation();
-        void this.closeTab(i);
+        void this.closeTab(tab.terminal);
       });
     });
 
@@ -664,7 +643,7 @@ export class TerminalView extends ItemView {
 
   // —— 供命令调用的 tab 导航 ——
   openNewTab(): void { void this.addTab(); }
-  closeActiveTab(): void { if (this.activeIndex >= 0) void this.closeTab(this.activeIndex); }
+  closeActiveTab(): void { const t = this.tabs[this.activeIndex]?.terminal; if (t) void this.closeTab(t); }
   nextTab(): void { if (this.tabs.length > 1) this.setActiveTab((this.activeIndex + 1) % this.tabs.length); }
   prevTab(): void { if (this.tabs.length > 1) this.setActiveTab((this.activeIndex - 1 + this.tabs.length) % this.tabs.length); }
   gotoTab(n: number): void { if (n >= 0 && n < this.tabs.length) this.setActiveTab(n); }
@@ -1086,23 +1065,6 @@ export class TerminalView extends ItemView {
     }
   }
 
-  private isDropEventInsideContainer(event: DragEvent, container: HTMLElement): boolean {
-    const target = event.target;
-    if (target instanceof Node && container.contains(target)) {
-      return true;
-    }
-
-    const rect = container.getBoundingClientRect();
-    if (rect.width <= 0 || rect.height <= 0) {
-      return false;
-    }
-
-    return event.clientX >= rect.left
-      && event.clientX <= rect.right
-      && event.clientY >= rect.top
-      && event.clientY <= rect.bottom;
-  }
-
   private uniquePaths(paths: string[]): string[] {
     const result: string[] = [];
     const seen = new Set<string>();
@@ -1441,9 +1403,17 @@ export class TerminalView extends ItemView {
   }
 
   private async openVaultFileReference(file: TFile, line?: number): Promise<void> {
-    const leaf = this.app.workspace.getLeaf(false);
-    await leaf.openFile(file, line ? { eState: { line: line - 1, col: 0 } } : undefined);
-    this.app.workspace.setActiveLeaf(leaf, { focus: true });
+    // 复用已打开该文件的 tab；否则新开一个 tab，避免劫持当前激活的（可能是别的笔记）tab。
+    const existingLeaf = this.app.workspace
+      .getLeavesOfType('markdown')
+      .find((candidate) => (candidate.view as MarkdownView).file?.path === file.path);
+    const leaf = existingLeaf ?? this.app.workspace.getLeaf('tab');
+
+    await leaf.openFile(file, {
+      active: true,
+      eState: line ? { line: line - 1, col: 0 } : undefined,
+    });
+    this.app.workspace.revealLeaf(leaf);
   }
 
   private updateAppearanceStyles(): void {
@@ -1483,32 +1453,6 @@ export class TerminalView extends ItemView {
         ? 'transparent'
         : this.terminalInstance.getEffectiveBackgroundColor(),
     });
-  }
-
-  private attachTerminalToContainer(options: TerminalAttachOptions = {}): void {
-    // 多 tab 模型下：把 active 终端挂到它自己的 pane（不清空父容器，保留其它 pane）
-    const pane = this.tabs[this.activeIndex]?.paneEl;
-    if (!pane || !this.terminalInstance) {
-      errorLog('[TerminalView] Render failed: missing pane or instance');
-      return;
-    }
-
-    try {
-      this.terminalInstance.attachToElement(pane);
-    } catch (error) {
-      errorLog('[TerminalView] Attach failed:', error);
-      new Notice(t('notices.terminal.renderFailed', { message: String(error) }));
-      return;
-    }
-
-    window.setTimeout(() => {
-      if (this.terminalInstance?.isAlive()) {
-        this.terminalInstance.fit();
-        if (options.focus !== false) {
-          this.terminalInstance.focus();
-        }
-      }
-    }, 100);
   }
 
   private setupResizeObserver(): void {
