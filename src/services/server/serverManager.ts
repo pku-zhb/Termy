@@ -44,6 +44,35 @@ interface DevReloadRequest {
 }
 
 /**
+ * 解析后端二进制 termy-server 的安装路径（供 ServerManager 与设置页共用）。
+ *
+ * 魔改 fork：termy-server 作为外置 CLI 安装（不放插件目录，避免被坚果云同步）。
+ * 按常见安装位置依次探测——Homebrew (Apple Silicon / Intel) → cargo（向后兼容）。
+ * 用绝对路径而非 `which`：Obsidian 是 Electron GUI 进程，其 PATH 常不含
+ * /opt/homebrew/bin，靠 PATH 找不到 brew 装的二进制。
+ *
+ * @returns path = 选中的路径（都没找到时返回首选的 brew 路径）；exists = 是否真实存在。
+ */
+export function resolveBackendBinaryPath(): { path: string; exists: boolean } {
+  const home = (window.require('os') as { homedir(): string }).homedir();
+  const path = window.require('path') as typeof import('path');
+  const fs = window.require('fs') as typeof import('fs');
+
+  if (process.platform === 'win32') {
+    const winPath = path.join(home, '.cargo', 'bin', 'termy-server.exe');
+    return { path: winPath, exists: fs.existsSync(winPath) };
+  }
+
+  const candidates = [
+    '/opt/homebrew/bin/termy-server',                   // Homebrew (Apple Silicon)
+    '/usr/local/bin/termy-server',                      // Homebrew (Intel)
+    path.join(home, '.cargo', 'bin', 'termy-server'),   // cargo（向后兼容）
+  ];
+  const found = candidates.find((candidate) => fs.existsSync(candidate));
+  return { path: found ?? candidates[0], exists: found !== undefined };
+}
+
+/**
  * Event listener type
  */
 type EventListener<K extends keyof ServerEvents> = ServerEvents[K];
@@ -376,28 +405,10 @@ export class ServerManager {
   }
 
   /**
-   * Get the binary path
-   *
-   * 魔改 fork：termy-server 作为外置 CLI 安装（不放插件目录，避免被坚果云同步）。
-   * 按常见安装位置依次探测——Homebrew (Apple Silicon / Intel) → cargo（向后兼容）。
-   * 用绝对路径探测而非 `which`：Obsidian 是 Electron GUI 进程，其 PATH 常不含
-   * /opt/homebrew/bin，靠 PATH 找不到 brew 装的二进制。
+   * Get the binary path（委托给共享的 resolveBackendBinaryPath，与设置页同源）
    */
   private getBinaryPath(): string {
-    const home = (window.require('os') as { homedir(): string }).homedir();
-
-    if (process.platform === 'win32') {
-      return this.path.join(home, '.cargo', 'bin', 'termy-server.exe');
-    }
-
-    const candidates = [
-      '/opt/homebrew/bin/termy-server',                          // Homebrew (Apple Silicon)
-      '/usr/local/bin/termy-server',                             // Homebrew (Intel)
-      this.path.join(home, '.cargo', 'bin', 'termy-server'),     // cargo（向后兼容）
-    ];
-
-    // 返回第一个真实存在的；都没有则返回首选（brew）路径，让启动报出清晰的未安装错误。
-    return candidates.find((candidate) => this.fs.existsSync(candidate)) ?? candidates[0];
+    return resolveBackendBinaryPath().path;
   }
 
   private async ensureExecutable(filePath: string): Promise<void> {

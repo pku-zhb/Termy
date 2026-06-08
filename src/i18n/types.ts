@@ -148,6 +148,7 @@ export interface TranslationKeys {
       debugLogEnabled: string;
       debugLogDisabled: string;
       scrollbackRangeError: string;
+      backendCommandCopied: string;
       heightRangeError: string;
       binaryAlreadyUpToDate: string;
     };
@@ -180,6 +181,14 @@ export interface TranslationKeys {
     terminal: {
       appearanceSettings: string;
       behaviorSettings: string;
+      backendSettings: string;
+      backendStatus: string;
+      backendStatusFound: string;
+      backendStatusMissing: string;
+      backendRecheck: string;
+      backendInstall: string;
+      backendInstallDesc: string;
+      backendCopyCommand: string;
       blurEffect: string;
       blurEffectDesc: string;
       rendererType: string;

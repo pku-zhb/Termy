@@ -20,6 +20,7 @@ import { t } from '../../i18n';
 import { PresetScriptModal } from '../../ui/terminal/presetScriptModal';
 import { renderPresetScriptIcon } from '../../ui/terminal/presetScriptIcons';
 import { getSelectableShellTypes } from '../../services/terminal/shellProfiles';
+import { resolveBackendBinaryPath } from '../../services/server/serverManager';
 import { clamp, normalizeBackgroundPosition, normalizeBackgroundSize, toCssUrl } from '../../utils/styleUtils';
 
 const CURSOR_STYLES = ['block', 'underline', 'bar'] as const;
@@ -186,8 +187,51 @@ export class TerminalSettingsRenderer extends BaseSettingsRenderer {
     // Behavior settings card
     this.renderBehaviorSettings(containerEl);
 
+    // Backend binary status + install card
+    this.renderBackendSettings(containerEl);
+
     // Feature visibility settings card
     this.renderVisibilitySettings(containerEl);
+  }
+
+  /**
+   * Render backend (termy-server) status + install instructions.
+   *
+   * 后端二进制不随 vault 同步，多机/新机器场景下需各自安装。此卡片显示当前探测到的
+   * 二进制路径/状态，并给出 Homebrew 安装命令。
+   */
+  private renderBackendSettings(containerEl: HTMLElement): void {
+    const card = containerEl.createDiv({ cls: 'settings-card' });
+    new Setting(card).setName(t('settingsDetails.terminal.backendSettings')).setHeading();
+
+    const INSTALL_CMD = 'brew install pku-zhb/termy/termy-server';
+
+    const statusSetting = new Setting(card).setName(t('settingsDetails.terminal.backendStatus'));
+    const renderStatus = (): void => {
+      const info = resolveBackendBinaryPath();
+      statusSetting.setDesc(info.exists
+        ? t('settingsDetails.terminal.backendStatusFound', { path: info.path })
+        : t('settingsDetails.terminal.backendStatusMissing'));
+    };
+    renderStatus();
+    statusSetting.addButton((btn) => btn
+      .setButtonText(t('settingsDetails.terminal.backendRecheck'))
+      .onClick(() => renderStatus()));
+
+    new Setting(card)
+      .setName(t('settingsDetails.terminal.backendInstall'))
+      .setDesc(createFragment((frag) => {
+        frag.appendText(t('settingsDetails.terminal.backendInstallDesc'));
+        frag.createEl('br');
+        frag.createEl('code', { text: INSTALL_CMD });
+      }))
+      .addButton((btn) => btn
+        .setButtonText(t('settingsDetails.terminal.backendCopyCommand'))
+        .setCta()
+        .onClick(() => {
+          void navigator.clipboard.writeText(INSTALL_CMD);
+          new Notice(t('notices.settings.backendCommandCopied'));
+        }));
   }
 
   /**
