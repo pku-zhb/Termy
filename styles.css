@@ -1721,6 +1721,15 @@
   text-decoration: underline;
   color: var(--text-accent-hover);
 }
+/* 跨行 file:// 链接悬停联动：非指针片段的下划线覆盖层（terminalView 手动定位，
+   挂在 .xterm-screen 下；不用 xterm decoration——备用屏幕下会被强制隐藏，
+   且本文件的手抄 xterm 样式从未包含 decoration 规则） */
+.termy-link-hover-underline {
+  position: absolute;
+  z-index: 10;
+  pointer-events: none;
+  border-bottom: 1px solid var(--text-accent-hover);
+}
 /* ==================== Error and Status Messages ==================== */
 .terminal-error-message {
   padding: 12px;

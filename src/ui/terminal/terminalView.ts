@@ -44,11 +44,13 @@ import {
   toPlatformPath,
 } from '../../services/terminal/terminalPathUtils';
 import {
+  buildTerminalFileUriJunctionCandidates,
   parseTerminalFileUriLinks,
   parseTerminalFileUriReference,
+  terminalFileUriLooksOpenAtEnd,
 } from '../../services/terminal/terminalFileLinks';
 import {
-  buildTerminalLineColumnMap,
+  buildTerminalLinkWindow,
   terminalBufferPositionForStringIndex,
 } from '../../services/terminal/terminalLinkGeometry';
 import type { TerminalSettings } from '../../settings/settings';
@@ -60,6 +62,7 @@ import { RenameTerminalModal } from './renameTerminalModal';
 type XtermTerminal = import('@xterm/xterm').Terminal;
 type XtermDisposable = import('@xterm/xterm').IDisposable;
 type XtermLink = import('@xterm/xterm').ILink;
+type XtermBufferRange = import('@xterm/xterm').IBufferRange;
 
 export const TERMINAL_VIEW_TYPE = 'terminal-view-dev';
 const IDLE_SHELL_PROCESS_NAMES = new Set([
@@ -127,6 +130,8 @@ export class TerminalView extends ItemView {
   private searchInput: HTMLInputElement | null = null;
   private resizeObserver: ResizeObserver | null = null;
   private fileUriLinkProvider: XtermDisposable | null = null;
+  /** 跨行链接悬停时手动铺设的下划线覆盖层元素 */
+  private linkHoverDecorations: HTMLElement[] = [];
   private titleChangeCleanup: (() => void) | null = null;
   private searchStateCleanup: (() => void) | null = null;
   private initPromise: Promise<TerminalInstance> | null = null;
@@ -330,6 +335,7 @@ export class TerminalView extends ItemView {
     this.leaf.detach = this.detachLeafWithoutConfirmation;
     this.resizeObserver?.disconnect();
     this.resizeObserver = null;
+    this.clearLinkHoverDecorations();
     this.fileUriLinkProvider?.dispose();
     this.fileUriLinkProvider = null;
     this.titleChangeCleanup?.();
@@ -1179,36 +1185,55 @@ export class TerminalView extends ItemView {
         }
 
         const links = parseTerminalFileUriLinks(window.text)
-          .map((link): XtermLink | null => {
-            const start = terminalBufferPositionForStringIndex(
-              link.startIndex,
-              window.lineTexts,
-              window.columnMaps,
-              window.startLineIndex,
-            );
-            const end = terminalBufferPositionForStringIndex(
-              link.endIndex - 1,
-              window.lineTexts,
-              window.columnMaps,
-              window.startLineIndex,
-            );
-            if (!start || !end) {
-              return null;
+          .flatMap((link): XtermLink[] => {
+            // 链接内部的硬换行拼接点，点击时做空格/截断变体回退。
+            const junctions = window.hardJunctions
+              .filter((junction) => junction > link.startIndex && junction < link.endIndex);
+            const relativeJunctions = junctions.map((junction) => junction - link.startIndex);
+
+            // 跨硬换行的链接按拼接点切成逐行片段：xterm 的单一 range 跨行时会把
+            // 下划线画满首行行尾和次行行首的空白（TUI 折行断点不在终端边缘）。
+            // 每段精确覆盖自己的文字，点击任何一段都打开同一目标。
+            const bounds = [link.startIndex, ...junctions, link.endIndex];
+            const ranges: XtermBufferRange[] = [];
+            for (let i = 0; i < bounds.length - 1; i += 1) {
+              const start = terminalBufferPositionForStringIndex(
+                bounds[i],
+                window.lineTexts,
+                window.columnMaps,
+                window.startLineIndex,
+              );
+              const end = terminalBufferPositionForStringIndex(
+                bounds[i + 1] - 1,
+                window.lineTexts,
+                window.columnMaps,
+                window.startLineIndex,
+              );
+              if (!start || !end) {
+                continue;
+              }
+              ranges.push({ start, end });
             }
 
-            const xtermLink: XtermLink = {
+            return ranges.map((range): XtermLink => ({
               text: link.uri,
-              range: { start, end },
+              range,
               activate: (event, text) => {
                 event.preventDefault();
-                void this.openTerminalHyperlinkTarget(text);
+                void this.openTerminalFileUriLink(text, relativeJunctions);
               },
-            };
-            return xtermLink;
+              // xterm 悬停只高亮指针下的片段；多片段时给其余片段叠加下划线
+              // 覆盖层，让整条链接跨行同亮。
+              ...(ranges.length > 1
+                ? {
+                  hover: () => this.underlineSiblingLinkRanges(xterm, ranges, range),
+                  leave: () => this.clearLinkHoverDecorations(),
+                }
+                : {}),
+            }));
           })
-          .filter((link): link is XtermLink =>
-            link !== null
-            && link.range.start.y <= bufferLineNumber
+          .filter((link) =>
+            link.range.start.y <= bufferLineNumber
             && link.range.end.y >= bufferLineNumber
           );
 
@@ -1220,39 +1245,106 @@ export class TerminalView extends ItemView {
   private getTerminalLinkWindow(
     xterm: XtermTerminal,
     bufferLineNumber: number,
-  ): { text: string; lineTexts: string[]; columnMaps: number[][]; startLineIndex: number } | null {
-    const buffer = xterm.buffer.active;
-    if (!buffer.getLine(bufferLineNumber)) {
-      return null;
-    }
+  ): { text: string; lineTexts: string[]; columnMaps: number[][]; startLineIndex: number; hardJunctions: number[] } | null {
+    // 软换行（isWrapped）由窗口直接拼接；TUI（Claude Code 等）的硬换行
+    // 由 buildTerminalLinkWindow 按「链接是否未闭合」的语义判定跨行扩展。
+    return buildTerminalLinkWindow(
+      xterm.buffer.active,
+      bufferLineNumber,
+      terminalFileUriLooksOpenAtEnd,
+    );
+  }
 
-    let startLineIndex = bufferLineNumber;
-    while (startLineIndex > 0 && buffer.getLine(startLineIndex)?.isWrapped) {
-      startLineIndex -= 1;
+  /**
+   * 跨行链接悬停联动：给同一条链接的其余片段叠加下划线覆盖层。
+   * xterm 一个链接对象只有一个矩形范围、悬停只高亮指针下的对象，「整条同亮」
+   * 只能自己画。不用 marker/decoration——tmux 等全屏程序跑在备用屏幕
+   * （alternate buffer）上，registerMarker 在备用屏幕直接返回 undefined。
+   * 改为按单元格像素尺寸手动定位 DOM 覆盖层；pointer-events 关闭，不抢鼠标。
+   */
+  private underlineSiblingLinkRanges(
+    xterm: XtermTerminal,
+    ranges: XtermBufferRange[],
+    hovered: XtermBufferRange,
+  ): void {
+    this.clearLinkHoverDecorations();
+    const screen = xterm.element?.querySelector('.xterm-screen');
+    if (!(screen instanceof HTMLElement) || xterm.cols <= 0 || xterm.rows <= 0) {
+      return;
     }
+    // 优先用渲染器的精确单元格尺寸（私有 API，做了防御）；本插件的 .xterm-screen
+    // 被样式表拉伸成 100%，clientWidth / cols 会带上不足一格的余量误差。
+    const renderDims = (xterm as unknown as {
+      _core?: { _renderService?: { dimensions?: { css?: { cell?: { width?: number; height?: number } } } } };
+    })._core?._renderService?.dimensions?.css?.cell;
+    const cellWidth = renderDims?.width || screen.clientWidth / xterm.cols;
+    const cellHeight = renderDims?.height || screen.clientHeight / xterm.rows;
+    const viewportTop = xterm.buffer.active.viewportY;
 
-    let endLineIndex = bufferLineNumber;
-    while (buffer.getLine(endLineIndex + 1)?.isWrapped) {
-      endLineIndex += 1;
-    }
-
-    const lineTexts: string[] = [];
-    const columnMaps: number[][] = [];
-    for (let lineIndex = startLineIndex; lineIndex <= endLineIndex; lineIndex += 1) {
-      const line = buffer.getLine(lineIndex);
-      if (!line) {
-        break;
+    for (const range of ranges) {
+      if (range === hovered) {
+        continue;
       }
-      lineTexts.push(line.translateToString(true));
-      columnMaps.push(buildTerminalLineColumnMap(line));
+      // 片段内部仍可能有软换行：逐可视行铺覆盖层。
+      for (let y = range.start.y; y <= range.end.y; y += 1) {
+        const viewportRow = y - 1 - viewportTop;
+        if (viewportRow < 0 || viewportRow >= xterm.rows) {
+          continue; // 滚出视口的行不画
+        }
+        const startColumn = y === range.start.y ? range.start.x - 1 : 0;
+        const endColumn = y === range.end.y ? range.end.x : xterm.cols;
+        if (endColumn <= startColumn) {
+          continue;
+        }
+        const underline = screen.createDiv('termy-link-hover-underline');
+        underline.style.left = `${startColumn * cellWidth}px`;
+        underline.style.top = `${viewportRow * cellHeight}px`;
+        underline.style.width = `${(endColumn - startColumn) * cellWidth}px`;
+        underline.style.height = `${cellHeight}px`;
+        this.linkHoverDecorations.push(underline);
+      }
+    }
+  }
+
+  private clearLinkHoverDecorations(): void {
+    for (const element of this.linkHoverDecorations) {
+      element.remove();
+    }
+    this.linkHoverDecorations = [];
+  }
+
+  /**
+   * 打开终端里识别出的 file:// 链接。链接若跨「硬换行」拼接而成（junctions 非空），
+   * 按词折行可能吃掉了断点处的空格、或把无关文字粘进了尾部——按
+   * 「原样 → 补空格 → 截断」的候选顺序，挑第一个能解析到真实文件的打开。
+   */
+  private async openTerminalFileUriLink(target: string, junctions: number[]): Promise<void> {
+    if (junctions.length > 0) {
+      for (const candidate of buildTerminalFileUriJunctionCandidates(target, junctions)) {
+        const reference = parseTerminalFileUriReference(candidate);
+        if (!reference) {
+          continue;
+        }
+        const filePath = fileUriToPlatformPath(reference.uri);
+        if (!filePath) {
+          continue;
+        }
+        const resolved = this.resolveTerminalFileReference(filePath);
+        if (!resolved) {
+          continue;
+        }
+        if (resolved.file) {
+          await this.openVaultFileReference(resolved.file, reference.line);
+          return;
+        }
+        const errorMessage = await shell.openPath(resolved.externalPath);
+        if (!errorMessage) {
+          return;
+        }
+      }
     }
 
-    return {
-      text: lineTexts.join(''),
-      lineTexts,
-      columnMaps,
-      startLineIndex,
-    };
+    await this.openTerminalHyperlinkTarget(target);
   }
 
   private async openTerminalHyperlinkTarget(target: string): Promise<void> {

@@ -2,9 +2,11 @@ import * as assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  buildTerminalFileUriJunctionCandidates,
   normalizeTerminalFileUriLinkTarget,
   parseTerminalFileUriReference,
   parseTerminalFileUriLinks,
+  terminalFileUriLooksOpenAtEnd,
 } from './terminalFileLinks.ts';
 
 test('parseTerminalFileUriLinks detects encoded Claude Code file URLs', () => {
@@ -164,4 +166,73 @@ test('parseTerminalFileUriLinks ignores non-file URLs', () => {
     parseTerminalFileUriLinks('https://example.com file-ish:///tmp/Nope.md'),
     [],
   );
+});
+
+test('terminalFileUriLooksOpenAtEnd treats extensionless tails as unfinished', () => {
+  // 被硬换行劈开、还没露出扩展名的几种真实形态
+  assert.equal(terminalFileUriLooksOpenAtEnd('see file:///Users/a/Nutstore Fi'), true);
+  assert.equal(terminalFileUriLooksOpenAtEnd('file:///Users/a/00 Temp/存储超级周期_长协扩'), true);
+  assert.equal(terminalFileUriLooksOpenAtEnd('file:///Users/a/%E5%AD%98%E5%82'), true);
+});
+
+test('terminalFileUriLooksOpenAtEnd treats digit-only dot tails as split filenames', () => {
+  // "置身钉内_14.34.50.pdf" 在 ".34" 后被劈开：纯数字段不是扩展名
+  assert.equal(terminalFileUriLooksOpenAtEnd('file:///Users/a/置身钉内_14.34'), true);
+});
+
+test('terminalFileUriLooksOpenAtEnd ignores directory dots before the basename', () => {
+  assert.equal(terminalFileUriLooksOpenAtEnd('file:///Users/a/.obsidian/plug'), true);
+});
+
+test('terminalFileUriLooksOpenAtEnd detects a split file:// prefix at a boundary', () => {
+  assert.equal(terminalFileUriLooksOpenAtEnd('open file:/'), true);
+  assert.equal(terminalFileUriLooksOpenAtEnd('open fil'), true);
+  // 普通单词结尾不是前缀残段
+  assert.equal(terminalFileUriLooksOpenAtEnd('bookshelf'), false);
+});
+
+test('terminalFileUriLooksOpenAtEnd leaves complete links alone', () => {
+  assert.equal(terminalFileUriLooksOpenAtEnd('file:///Users/a/Note.md'), false);
+  assert.equal(terminalFileUriLooksOpenAtEnd('file:///Users/a/Note.md#L12'), false);
+  assert.equal(terminalFileUriLooksOpenAtEnd('file:///Users/a/AVGO 26Q1 CB.md'), false);
+  assert.equal(terminalFileUriLooksOpenAtEnd('file:///Users/a/Note.md 已经打开'), false);
+  assert.equal(terminalFileUriLooksOpenAtEnd('no links here'), false);
+  assert.equal(terminalFileUriLooksOpenAtEnd(''), false);
+});
+
+test('buildTerminalFileUriJunctionCandidates orders exact, spaced, then truncated', () => {
+  const text = 'file:///a/00Temp/N.md';
+  const junction = text.indexOf('Temp');
+  assert.deepEqual(buildTerminalFileUriJunctionCandidates(text, [junction]), [
+    text,
+    'file:///a/00 Temp/N.md',
+    'file:///a/00',
+  ]);
+  // 无拼接点 / 越界拼接点 → 只有原样
+  assert.deepEqual(buildTerminalFileUriJunctionCandidates(text, []), [text]);
+  assert.deepEqual(buildTerminalFileUriJunctionCandidates(text, [0, text.length, -3]), [text]);
+});
+
+test('buildTerminalFileUriJunctionCandidates enumerates small combinations by size', () => {
+  assert.deepEqual(buildTerminalFileUriJunctionCandidates('abcdef', [2, 4]), [
+    'abcdef',
+    'ab cdef',
+    'abcd ef',
+    'ab cd ef',
+    'abcd',
+    'ab',
+  ]);
+});
+
+test('parseTerminalFileUriLinks splits links glued together by hard-wrap joins', () => {
+  // 回归：相邻两条链接被硬换行拼接粘连时（"…md#L12file:///…"），
+  // 锚点的字符类不能把下一条链接吞进来，必须各自独立成链。
+  const first = 'file:///Users/a/00Temp/存储_全综述.md#L12';
+  const second = 'file:///Users/a/00Temp/置身钉内_14.34.50.pdf';
+  const links = parseTerminalFileUriLinks(`${first}${second}`);
+
+  assert.deepEqual(links, [
+    { uri: first, startIndex: 0, endIndex: first.length },
+    { uri: second, startIndex: first.length, endIndex: first.length + second.length },
+  ]);
 });
