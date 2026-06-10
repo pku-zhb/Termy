@@ -548,7 +548,7 @@ export class TerminalView extends ItemView {
   }
 
   /**
-   * 关闭指定 tab；关闭最后一个时连同关闭整个 view
+   * 关闭指定 tab；关闭最后一个时不关闭 view，自动新开一个终端
    */
   async closeTab(target: number | TerminalInstance): Promise<void> {
     // 按 tab 对象身份定位，而非渲染时捕获的下标——下标在异步确认/销毁期间会失效。
@@ -580,7 +580,9 @@ export class TerminalView extends ItemView {
       if (this.tabs.length === 0) {
         this.terminalInstance = null;
         this.activeIndex = -1;
-        this.detachLeafWithoutConfirmation();
+        // 关闭最后一个 tab 时保留 view，自动重开一个新终端；
+        // 若新建失败，addTab 内部会回退为关闭整个 view。
+        await this.addTab();
         return;
       }
 
