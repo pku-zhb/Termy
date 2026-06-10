@@ -1,249 +1,89 @@
 <div align="center">
 
-# Termy
+# Termy Dev
 
-<img src="assets\termy-tg-avatar-transparent.svg" width="150" alt="Termy logo" />
+<img src="assets/termy-tg-avatar-transparent.svg" width="120" alt="Termy logo" />
 
-*AI CLI-integrated terminal for Obsidian*
+*魔改版 Termy：为 AI CLI 工作流深度定制的 Obsidian 终端*
 
-Powered by xterm.js and a native Rust PTY backend, with split panes, reusable workflows, and file-aware interactions.
+基于 [ZyphrZero/Termy](https://github.com/ZyphrZero/Termy) 的个人 fork，插件 id `termy-dev`，与原版共存。
 
-[![Version](https://img.shields.io/badge/version-1.4.1-7c3aed?style=for-the-badge)](./manifest.json)
+[![Version](https://img.shields.io/badge/version-1.5.0-7c3aed?style=for-the-badge)](./manifest.json)
 [![Obsidian](https://img.shields.io/badge/Obsidian-Desktop%20Only-8b5cf6?style=for-the-badge)](https://obsidian.md/)
-[![Community Plugin](https://img.shields.io/badge/Obsidian-Community%20Plugin-22c55e?style=for-the-badge)](https://obsidian.md/plugins?id=termy)
 [![License](https://img.shields.io/badge/license-GPL--3.0-blue?style=for-the-badge)](./LICENSE)
 [![PTY](https://img.shields.io/badge/backend-Rust%20PTY-f97316?style=for-the-badge)](./rust-servers)
-
-English / [简体中文](./README_ZH.md)
-
-[Install](#installation) · [Quick Start](#quick-start) · [Features](#features) · [Screenshots](#visual-tour) · [Report Issues](https://github.com/ZyphrZero/Termy/issues) · [Telegram](https://t.me/+t6oRqhaw8c1jNzE1)
+[![Upstream](https://img.shields.io/badge/upstream-ZyphrZero%2FTermy-22c55e?style=for-the-badge)](https://github.com/ZyphrZero/Termy)
 
 <p align="center">
-  <img src="assets/termy-workspace-overview.png" width="980" alt="Termy main workspace preview with Obsidian, Codex CLI, OpenCode, and Claude Code" />
+  <img src="assets/termy-dev-poster.png" width="840" alt="Termy Dev 宣传海报" />
 </p>
 
 </div>
 
 ---
 
-## Why Termy?
+## 这是什么
 
-Termy is built for people who already live in Obsidian and do real work in a terminal. It is designed as more than a terminal pane: it provides a workflow-oriented terminal environment that stays aligned with your vault, editor context, and AI coding sessions.
+在 Obsidian 里长期跑 Claude Code / Codex 这类 AI CLI，原版 Termy 已经很好用，但日常重度使用还差几口气：终端多了标签乱、快捷键和 Obsidian/CLI 打架、agent 输出的文件路径点不了。这个 fork 把这些都补上了。
 
-- **Native PTY backend**: Rust keeps the backend lean and avoids extra bridge runtimes.
-- **Real terminal UX**: xterm.js frontend with search, copy/paste, prompt navigation, split panes, and multi-session support.
-- **Workflow-driven automation**: Run reusable terminal, Obsidian-command, and external-link workflows from the status bar or command palette.
-- **File-aware interactions**: Drag text, files, and folders into the terminal and open file references directly from terminal output.
-- **AI-aware context handoff**: Claude Code, Codex CLI, and OpenCode integrations can inherit active note context from Obsidian.
-- **Desktop-first customization**: Shell selection, tab/split placement rules, theme sync, background images, blur, renderer controls, and Windows input handling.
+## 与上游的差异
 
-## Features
+### 🗂 单标签内多终端
 
-### Terminal Workspace
+一个 Obsidian 标签页内管理多个终端 tab，不再把工作区标签栏撑爆。
 
-- Run local shells directly inside Obsidian on Windows, macOS, and Linux.
-- Use `cmd`, PowerShell, PowerShell Core, WSL, Git Bash, `bash`, `zsh`, or a custom shell path.
-- Open terminals in the current tab, a new tab, left/right tab groups, horizontal/vertical splits, or a new window.
-- Search terminal output, clear screen or buffer, resize fonts, navigate prompts, and copy/paste normally.
-- Keep new terminals near existing terminal tabs, focus them automatically, or pin them on creation.
+| 快捷键 | 动作 |
+|---|---|
+| `Opt+T` | 新建终端 tab |
+| `Opt+W` | 关闭当前 tab（关最后一个自动重开新终端，不关 view） |
+| `Opt+Tab` / `Opt+Shift+Tab` | 下一个 / 上一个 tab |
+| `Opt+1…9` / `Opt+0` | 跳到第 N / 第 10 个 tab |
 
-### Workflows & Launchers
+tab 栏自带状态图标：自动识别前台运行的 **tmux / Claude Code / Codex / SSH** 并显示对应标志。
 
-- Create preset workflows with one or more ordered actions.
-- Combine terminal commands, Obsidian commands, and external links in a single workflow.
-- Launch workflows from the status bar menu, command palette, or built-in workflow commands.
-- Decide whether each workflow appears in the status bar, opens a terminal, starts a fresh terminal instance, or renames the target tab.
-- Start quickly with built-in launchers for Claude Code, Codex CLI, OpenCode, and Gemini CLI.
+### ⌨️ 键盘三分法路由
 
-### Obsidian Interactions
+解决「一个键盘三方抢」的问题，规则可在设置里用 JSON 调整：
 
-- Send the current editor selection, full note, or active note path into the active terminal.
-- Drag text, files, and folders into the terminal to paste content or resolved paths.
-- Click file references printed by tools, agents, scripts, or compilers to reopen matching vault files or external paths.
-- Open the bundled changelog from the command palette or settings.
+- **Opt+\*** → Termy（tab 管理）
+- **Cmd+\*** → Obsidian（全局快捷键不被终端吞掉）
+- **Ctrl+\*** → 终端内程序（Claude Code / Codex / vim 的键位原样到达，支持黑名单例外）
 
-### AI & Coding Integrations
+### 🔗 终端 file:// 链接
 
-> [!NOTE]
-> Claude Code, OpenCode, or Codex sessions started from an external terminal are ordinary CLI processes outside Termy's Obsidian integration layer, so they cannot automatically know the active note, vault/workspace root, or editor selection.
+AI agent 在输出里引用的 `file://` 路径直接可点：
 
-- Termy starts AI CLIs inside the current vault context, where the active note, selection, open files, and workspace root can be available to coding tasks.
-- Claude Code and OpenCode use Termy's IDE bridge; Codex uses a vault-local Skill at `.agents/skills/termy-obsidian-context/SKILL.md`.
-- The built-in Codex launcher starts `codex` directly, without MCP registration or global CLI configuration changes.
+- vault 内文件在 **Obsidian 里打开**，支持 `#L12` 行号锚点；vault 外走系统默认程序
+- 原样空格、`%20` 编码、中文/全角文件名都支持
+- **TUI 硬换行完整支持**：Claude Code/Codex/tmux 把长链接折成多行后自动拼回；按词折行吃掉的空格点击时自动找回；相邻链接不粘连；悬停任意一行整条链接同亮、下划线逐行精确
 
-### Privacy and Network Access
+### 🍺 后端 Homebrew 化
 
-- Termy does not include telemetry or analytics.
-- Termy downloads the matching native PTY server binary when needed. The default source is `https://termy.changqiu.xyz`; GitHub Releases can be selected in settings, and offline mode disables automatic download/update checks.
-- Terminal sessions run local shell commands and user-configured workflows. Those commands may read files, modify files, or access the network according to the shell command or external CLI being run.
-- Termy starts local WebSocket connections for its PTY backend and optional IDE bridge. These connections are used for local terminal transport and editor-context handoff.
-- Context-aware AI launchers can pass the active note path, selection, editor context, and vault/workspace path to local CLI tools. The Codex integration writes a vault-local helper skill under `.agents/skills/termy-obsidian-context/`.
-- Optional: when **Check for AI launcher updates** is enabled in settings, Termy queries `https://registry.npmjs.org` for the latest Claude Code and Codex CLI releases, and `https://api.github.com` for the latest OpenCode release. The setting is **off by default** and offline mode disables it regardless of the toggle.
+Rust PTY 后端 `termy-server` 改为 Homebrew 分发（不再进 vault 同步目录），设置页新增后端卡片显示运行状态和安装指引。
 
-### Appearance & Ergonomics
+### 🀄 输入法修复
 
-- Follow the Obsidian theme or use custom foreground and background colors.
-- Choose Canvas or WebGL rendering, with automatic Canvas fallback when background images are enabled.
-- Configure background image URL/path, opacity, size, position, blur amount, and text opacity.
-- Use localized UI in English, Simplified Chinese, Japanese, Korean, and Russian.
-- Tune Windows-friendly input behavior with `win32-input-mode` support for shells that depend on native key events.
+拼音等输入法的合成预览（preedit）在终端内正常显示，不再隐形。
 
-## Visual Tour
+## 安装
 
-<details open>
-<summary><strong>Workspace preview</strong></summary>
-<br />
+**1. 安装插件**（手动）：
 
-<p align="center">
-  <img src="assets/termy-workspace-overview.png" width="980" alt="Termy full workspace preview" />
-</p>
+从 [Releases](https://github.com/pku-zhb/Termy/releases) 下载最新 `termy-x.y.z.zip`，解压到 vault 的 `.obsidian/plugins/termy-dev/`，在 Obsidian 设置中启用 **Termy Dev**。
 
-</details>
-
-<details>
-<summary><strong>Workflow UI</strong></summary>
-<br />
-
-<table>
-  <tr>
-    <td width="34%" align="center">
-      <img src="assets/termy-statusbar-workflows.png" alt="Termy workflow launcher menu from the status bar" />
-      <br />
-      <sub>Status bar workflow launcher</sub>
-    </td>
-    <td width="66%" align="center">
-      <img src="assets/termy-settings-workflows.png" alt="Termy workflow settings with built-in Claude Code, Codex CLI, OpenCode, and Gemini CLI entries" />
-      <br />
-      <sub>Workflow configuration, instance behavior, and built-in launchers</sub>
-    </td>
-  </tr>
-</table>
-
-<p align="center">
-  <img src="assets/termy-workflow-editor.png" width="900" alt="Termy preset workflow editor with actions, notes, and context-awareness settings" />
-  <br />
-  <sub>Preset workflow editor with action ordering, notes, and context-awareness controls</sub>
-</p>
-
-</details>
-
-<details>
-<summary><strong>Theme customization</strong></summary>
-<br />
-
-<p align="center">
-  <img src="assets/termy-settings-theme.png" width="900" alt="Termy theme settings with background image, blur, and text opacity controls" />
-</p>
-
-</details>
-
-## Command Highlights
-
-| Command | What it does |
-| --- | --- |
-| `Open Termy terminal` | Opens a new Termy instance using your configured placement rules. |
-| `Termy: show changelog` | Opens the bundled changelog modal. |
-| `Terminal: split horizontal / split vertical` | Splits the active terminal. |
-| `Terminal: send selection` | Sends the current editor selection to the active terminal. |
-| `Terminal: send current note` | Sends the full current note content. |
-| `Terminal: send current path` | Sends the active note path. |
-| `Terminal: previous prompt / next prompt` | Navigates prompt history. |
-| `Terminal: last failed command` | Jumps to the most recent failed command when available. |
-
-## Installation
-
-### Requirements
-
-- Obsidian Desktop
-- Windows, macOS, or Linux
-
-> [!WARNING]
-> Termy is desktop-only because it uses a native PTY backend.
-
-### Install from the Obsidian Community Plugins (recommended)
-
-Termy is now listed in the official Obsidian Community Plugins directory.
-
-1. Open **Settings → Community plugins** and turn off **Restricted mode** if it is enabled.
-2. Click **Browse** and search for `Termy`.
-3. Click **Install**, then **Enable**.
-
-### Install with BRAT (early updates)
-
-Use BRAT if you want to track the latest tagged build before it ships to the community directory.
-
-1. Install [BRAT](https://github.com/TfTHacker/obsidian42-brat).
-2. Open BRAT settings and choose **Add beta plugin**.
-3. Enter `ZyphrZero/Termy`.
-4. Install the plugin and enable it in **Settings → Community plugins**.
-
-### Manual install
-
-1. Download the latest release from [GitHub Releases](https://github.com/ZyphrZero/Termy/releases).
-2. Extract the release files into `.obsidian/plugins/termy/` inside your vault.
-3. Reload Obsidian.
-4. Enable Termy in **Settings → Community plugins**.
-
-## Quick Start
-
-1. Open Termy from the ribbon, command palette, empty-tab action, or status bar.
-2. Choose your shell and terminal placement behavior in settings.
-3. Try the built-in workflows from the status bar menu.
-4. Send your current selection, note, or file path into the terminal.
-5. Drag a file or folder into the terminal to paste its resolved path.
-6. Click file references printed by tools or agents to jump back into the matching file.
-
-## Development
+**2. 安装后端**：
 
 ```bash
-pnpm install
-pnpm build
-pnpm build:rust
-pnpm package:zip
+brew tap pku-zhb/termy
+brew install termy-server
 ```
 
-| Script | Purpose |
-| --- | --- |
-| `pnpm dev` | Frontend build/watch flow. |
-| `pnpm build` | TypeScript check, production bundle, and bundle smoke check. |
-| `pnpm build:rust` | Build native PTY backend binaries. |
-| `pnpm package:zip` | Create a release zip. |
-| `pnpm install:dev <vault-path>` | Build everything and install into a local dev vault. Pass `--no-rust` to skip the native PTY rebuild when only TypeScript changed. |
-| `pnpm test:terminal` | Compile and run terminal-layer Node tests. |
+升级后端时注意：先 disable 插件、等约 30 秒让旧 server 自动退出，再 enable，否则会重连到内存里的旧进程。
 
-## Architecture
+## 致谢
 
-```mermaid
-graph LR
-  A[Obsidian Plugin UI] --> B[xterm.js Terminal]
-  B --> C[Native Rust PTY Server]
-  A --> D[Workflow Launcher]
-  A --> E[Context Services]
-  E --> F[Claude/OpenCode IDE Bridge]
-  E --> G[Codex Skill Context]
-  D --> H[AI CLI Launchers]
-```
-
-- **Frontend**: TypeScript, Obsidian plugin APIs, and xterm.js.
-- **Backend**: Native Rust PTY server built on `portable-pty`.
-- **AI context**: Claude Code and OpenCode integrate through the IDE bridge; Codex integrates through a vault-local Skill.
-- **Packaging**: Generated plugin assets are emitted as `main.js` and `styles.css`; the native server is distributed separately as an external `termy-server` CLI.
+本项目 fork 自 [ZyphrZero/Termy](https://github.com/ZyphrZero/Termy)——原版的架构（Rust PTY 后端 + xterm.js 前端、workflow 系统、拖拽交互、AI 上下文接力）都是上游的工作，请去给原作者 star。上游完整文档见 [原版 README](https://github.com/ZyphrZero/Termy#readme)。
 
 ## License
 
-Termy is licensed under [GPL-3.0](./LICENSE).
-
-## Credits
-
-- [xterm.js](https://xtermjs.org/)
-- [portable-pty](https://github.com/wez/wezterm/tree/main/pty)
-
----
-
-<div align="center">
-
-**Made with ❤️ for Obsidian power users**
-
-If Termy helps your workflow, consider starring the project.
-
-</div>
+[GPL-3.0](./LICENSE)，与上游一致。
