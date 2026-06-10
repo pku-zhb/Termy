@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   isImeCommitFallbackText,
   shouldBypassKeyboardEncodingForTextKey,
+  shouldScheduleImeCommitFallbackForBeforeInput,
 } from './imeCommitFallback.ts';
 
 test('isImeCommitFallbackText accepts fullwidth punctuation', () => {
@@ -64,6 +65,41 @@ test('shouldBypassKeyboardEncodingForTextKey accepts text-producing physical key
   assert.equal(
     shouldBypassKeyboardEncodingForTextKey({ type: 'keydown', key: 'Unidentified', code: 'Slash', shiftKey: true }),
     true,
+  );
+});
+
+test('shouldScheduleImeCommitFallbackForBeforeInput skips mid-composition partials', () => {
+  // 流式语音输入法：每个中间识别结果都是 insertCompositionText，合成进行中，绝不补发。
+  assert.equal(
+    shouldScheduleImeCommitFallbackForBeforeInput({ inputType: 'insertCompositionText' }, true),
+    false,
+  );
+  assert.equal(
+    shouldScheduleImeCommitFallbackForBeforeInput({ inputType: 'insertCompositionText' }, false),
+    false,
+  );
+  // 即便是 insertText，只要还在合成态，也不能逐段补发。
+  assert.equal(
+    shouldScheduleImeCommitFallbackForBeforeInput({ inputType: 'insertText' }, true),
+    false,
+  );
+});
+
+test('shouldScheduleImeCommitFallbackForBeforeInput arms on non-composition insertText', () => {
+  assert.equal(
+    shouldScheduleImeCommitFallbackForBeforeInput({ inputType: 'insertText' }, false),
+    true,
+  );
+});
+
+test('shouldScheduleImeCommitFallbackForBeforeInput ignores deletions and other input types', () => {
+  assert.equal(
+    shouldScheduleImeCommitFallbackForBeforeInput({ inputType: 'deleteContentBackward' }, false),
+    false,
+  );
+  assert.equal(
+    shouldScheduleImeCommitFallbackForBeforeInput({ inputType: 'insertFromPaste' }, false),
+    false,
   );
 });
 

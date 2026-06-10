@@ -18,6 +18,12 @@ import {
   setCurrentPlatformShell,
 } from '@/settings/settings';
 import type { TerminalInstance } from './terminalInstance';
+import {
+  compileKeybindingConfig,
+  DEFAULT_KEYBINDING_RULES,
+  type KeybindingRule,
+  type KeybindingConfigEntry,
+} from './keybindingRules';
 import { debugLog, debugWarn, errorLog } from '@/utils/logger';
 import { t } from '@/i18n';
 import type { ServerManager } from '@/services/server/serverManager';
@@ -58,7 +64,10 @@ export class TerminalService {
   
   // Terminal instance registry
   private terminals: Map<string, TerminalInstance> = new Map();
-  
+
+  // 键盘路由规则（从 settings.keybindings 编译；非法时回退默认）
+  private keybindingRules: KeybindingRule[] = DEFAULT_KEYBINDING_RULES;
+
   // Shutdown state flag
   private isShuttingDown = false;
 
@@ -74,6 +83,7 @@ export class TerminalService {
     this.serverManager = serverManager;
     this.getTerminalEnvironment = getTerminalEnvironment;
     this.saveSettings = saveSettings;
+    this.keybindingRules = this.compileKeybindingRules(settings.keybindings);
     
     // Listen for server events
     this.setupServerEventHandlers();
@@ -238,6 +248,7 @@ export class TerminalService {
         enableBlur: this.settings.enableBlur,
         blurAmount: this.settings.blurAmount,
         textOpacity: this.settings.textOpacity,
+        keybindingRules: this.keybindingRules,
       });
       
       // Initialize the terminal through ServerManager
@@ -346,6 +357,37 @@ export class TerminalService {
    */
   updateSettings(settings: TerminalSettings): void {
     this.settings = settings;
+    // 重新编译键盘规则并热推送给所有活动终端（无需重开终端即可生效）。
+    this.keybindingRules = this.compileKeybindingRules(settings.keybindings);
+    for (const terminal of this.terminals.values()) {
+      terminal.setKeybindingRules(this.keybindingRules);
+    }
+  }
+
+  /**
+   * 把用户的键盘配置 JSON 编译成规则。容错：单条无效（如新加但还没设按键的空行）只跳过，
+   * 不让整份配置失效；只有整体 JSON 坏掉或没有任何有效规则时才回退默认，绝不让终端失去键盘。
+   */
+  private compileKeybindingRules(keybindingsJson: string | undefined): KeybindingRule[] {
+    if (!keybindingsJson) {
+      return DEFAULT_KEYBINDING_RULES;
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(keybindingsJson);
+    } catch (e) {
+      debugWarn('[TerminalService] 键盘配置 JSON 解析失败，回退默认：', e);
+      return DEFAULT_KEYBINDING_RULES;
+    }
+    if (!Array.isArray(parsed)) {
+      debugWarn('[TerminalService] 键盘配置不是数组，回退默认');
+      return DEFAULT_KEYBINDING_RULES;
+    }
+    const rules = compileKeybindingConfig(
+      parsed as KeybindingConfigEntry[],
+      (message) => debugWarn('[TerminalService] 跳过无效键盘规则：', message),
+    );
+    return rules.length > 0 ? rules : DEFAULT_KEYBINDING_RULES;
   }
 
   /**

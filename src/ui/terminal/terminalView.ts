@@ -47,6 +47,10 @@ import {
   parseTerminalFileUriLinks,
   parseTerminalFileUriReference,
 } from '../../services/terminal/terminalFileLinks';
+import {
+  buildTerminalLineColumnMap,
+  terminalBufferPositionForStringIndex,
+} from '../../services/terminal/terminalLinkGeometry';
 import type { TerminalSettings } from '../../settings/settings';
 import { debugLog, errorLog } from '../../utils/logger';
 import { clamp, normalizeBackgroundPosition, normalizeBackgroundSize, toCssUrl } from '../../utils/styleUtils';
@@ -1174,14 +1178,16 @@ export class TerminalView extends ItemView {
 
         const links = parseTerminalFileUriLinks(window.text)
           .map((link): XtermLink | null => {
-            const start = this.stringIndexToTerminalBufferPosition(
+            const start = terminalBufferPositionForStringIndex(
               link.startIndex,
               window.lineTexts,
+              window.columnMaps,
               window.startLineIndex,
             );
-            const end = this.stringIndexToTerminalBufferPosition(
+            const end = terminalBufferPositionForStringIndex(
               link.endIndex - 1,
               window.lineTexts,
+              window.columnMaps,
               window.startLineIndex,
             );
             if (!start || !end) {
@@ -1212,7 +1218,7 @@ export class TerminalView extends ItemView {
   private getTerminalLinkWindow(
     xterm: XtermTerminal,
     bufferLineNumber: number,
-  ): { text: string; lineTexts: string[]; startLineIndex: number } | null {
+  ): { text: string; lineTexts: string[]; columnMaps: number[][]; startLineIndex: number } | null {
     const buffer = xterm.buffer.active;
     if (!buffer.getLine(bufferLineNumber)) {
       return null;
@@ -1229,39 +1235,22 @@ export class TerminalView extends ItemView {
     }
 
     const lineTexts: string[] = [];
+    const columnMaps: number[][] = [];
     for (let lineIndex = startLineIndex; lineIndex <= endLineIndex; lineIndex += 1) {
       const line = buffer.getLine(lineIndex);
       if (!line) {
         break;
       }
       lineTexts.push(line.translateToString(true));
+      columnMaps.push(buildTerminalLineColumnMap(line));
     }
 
     return {
       text: lineTexts.join(''),
       lineTexts,
+      columnMaps,
       startLineIndex,
     };
-  }
-
-  private stringIndexToTerminalBufferPosition(
-    stringIndex: number,
-    lineTexts: string[],
-    startLineIndex: number,
-  ): { x: number; y: number } | null {
-    let remainingIndex = stringIndex;
-    for (let lineOffset = 0; lineOffset < lineTexts.length; lineOffset += 1) {
-      const lineLength = lineTexts[lineOffset].length;
-      if (remainingIndex < lineLength) {
-        return {
-          x: remainingIndex + 1,
-          y: startLineIndex + lineOffset + 1,
-        };
-      }
-      remainingIndex -= lineLength;
-    }
-
-    return null;
   }
 
   private async openTerminalHyperlinkTarget(target: string): Promise<void> {
@@ -1460,6 +1449,7 @@ export class TerminalView extends ItemView {
       backgroundColor: canUseBackgroundImage
         ? 'transparent'
         : this.terminalInstance.getEffectiveBackgroundColor(),
+      foregroundColor: this.terminalInstance.getEffectiveForegroundColor(),
     });
   }
 
@@ -1537,6 +1527,7 @@ export class TerminalView extends ItemView {
     scale: string;
     textOpacity: string;
     backgroundColor: string;
+    foregroundColor: string;
   }): void {
     if (!this.terminalContainer) return;
     const style = this.terminalContainer.style;
@@ -1548,8 +1539,11 @@ export class TerminalView extends ItemView {
     style.setProperty('--terminal-bg-scale', vars.scale);
     style.setProperty('--terminal-text-opacity', vars.textOpacity);
     style.setProperty('--terminal-bg-color', vars.backgroundColor);
+    // IME 合成预览（.composition-view）用它做「同色字」：字色取终端前景色。
+    style.setProperty('--terminal-fg-color', vars.foregroundColor);
     const viewContainer = this.containerEl.querySelector<HTMLElement>('.terminal-view-container');
     viewContainer?.style.setProperty('--terminal-bg-color', vars.backgroundColor);
+    viewContainer?.style.setProperty('--terminal-fg-color', vars.foregroundColor);
   }
 
   private disposeAppearanceStyle(): void {
@@ -1563,8 +1557,10 @@ export class TerminalView extends ItemView {
     style.removeProperty('--terminal-bg-scale');
     style.removeProperty('--terminal-text-opacity');
     style.removeProperty('--terminal-bg-color');
+    style.removeProperty('--terminal-fg-color');
     const viewContainer = this.containerEl.querySelector<HTMLElement>('.terminal-view-container');
     viewContainer?.style.removeProperty('--terminal-bg-color');
+    viewContainer?.style.removeProperty('--terminal-fg-color');
   }
 
   /**

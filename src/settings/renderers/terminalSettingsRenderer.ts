@@ -21,6 +21,15 @@ import { PresetScriptModal } from '../../ui/terminal/presetScriptModal';
 import { renderPresetScriptIcon } from '../../ui/terminal/presetScriptIcons';
 import { getSelectableShellTypes } from '../../services/terminal/shellProfiles';
 import { resolveBackendBinaryPath } from '../../services/server/serverManager';
+import {
+  parseKeybindingConfigJson,
+  keyboardEventToWhen,
+  DEFAULT_KEYBINDING_CONFIG_JSON,
+  TERMY_ACTION_LIST,
+  type KeyboardRoute,
+  type TermyKeyAction,
+  type KeybindingConfigEntry,
+} from '../../services/terminal/keybindingRules';
 import { clamp, normalizeBackgroundPosition, normalizeBackgroundSize, toCssUrl } from '../../utils/styleUtils';
 
 const CURSOR_STYLES = ['block', 'underline', 'bar'] as const;
@@ -190,8 +199,175 @@ export class TerminalSettingsRenderer extends BaseSettingsRenderer {
     // Backend binary status + install card
     this.renderBackendSettings(containerEl);
 
+    // Keyboard shortcut routing card
+    this.renderKeybindingSettings(containerEl);
+
     // Feature visibility settings card
     this.renderVisibilitySettings(containerEl);
+  }
+
+  /**
+   * 键盘快捷键路由的可视化编辑器：每条规则一行，可「按下捕获」按键、用下拉选去向/动作、
+   * 增删行、恢复默认；底层仍存成 settings.keybindings 的 JSON（高级折叠区可直接编辑）。
+   * 规则语义见 keybindingRules.ts。
+   */
+  private renderKeybindingSettings(containerEl: HTMLElement): void {
+    const ROUTE_LABELS: Record<KeyboardRoute, string> = {
+      termy: 'Termy 动作',
+      obsidian: '还给 Obsidian',
+      terminal: '透传给程序',
+    };
+    const ACTION_LABELS: Record<TermyKeyAction, string> = {
+      'tab-new': '新建 tab', 'tab-close': '关闭 tab', 'tab-rename': '重命名 tab',
+      'tab-next': '下一个 tab', 'tab-prev': '上一个 tab', 'tab-goto': '跳到第 N 个 tab',
+      'search-toggle': '搜索', 'font-increase': '放大字体', 'font-decrease': '缩小字体',
+      'font-reset': '重置字体', copy: '复制', paste: '粘贴', newline: '换行',
+    };
+
+    const card = containerEl.createDiv({ cls: 'settings-card' });
+    new Setting(card).setName('键盘快捷键').setHeading();
+    new Setting(card).setDesc(createFragment((frag) => {
+      frag.appendText('每条规则决定一个组合键交给谁：');
+      frag.createEl('b', { text: 'Termy 动作' });
+      frag.appendText('、还给 Obsidian、或透传给终端里的程序。点「按键」按钮后直接按下组合键即可设置。从上往下第一条命中者生效。');
+    }));
+
+    let entries = this.readKeybindingEntries();
+    const commit = (): void => {
+      this.context.plugin.settings.keybindings = JSON.stringify(entries, null, 2);
+      void this.saveSettings();
+    };
+
+    const listEl = card.createDiv({ cls: 'termy-keybind-list' });
+    let capturing = false;
+
+    const startCapture = (entry: KeybindingConfigEntry, btn: HTMLButtonElement): void => {
+      if (capturing) return;
+      capturing = true;
+      const previous = btn.textContent;
+      btn.setText('按下按键…(Esc 取消)');
+      btn.addClass('is-capturing');
+      const cleanup = (): void => {
+        capturing = false;
+        btn.removeClass('is-capturing');
+        activeDocument.removeEventListener('keydown', onKey, true);
+      };
+      const onKey = (e: KeyboardEvent): void => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (e.key === 'Escape' && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
+          cleanup();
+          btn.setText(previous ?? '');
+          return;
+        }
+        const when = keyboardEventToWhen(e);
+        if (!when) return; // 还只按着修饰键，继续等主键
+        entry.when = when;
+        cleanup();
+        commit();
+        renderList();
+      };
+      activeDocument.addEventListener('keydown', onKey, true);
+    };
+
+    const renderList = (): void => {
+      listEl.empty();
+      entries.forEach((entry, index) => {
+        const row = listEl.createDiv({ cls: 'termy-keybind-row' });
+
+        const keyBtn = row.createEl('button', {
+          cls: 'termy-keybind-key',
+          text: entry.when || '点击设置按键',
+        });
+        if (!entry.when) keyBtn.addClass('is-empty');
+        keyBtn.addEventListener('click', () => startCapture(entry, keyBtn));
+
+        const routeSel = row.createEl('select', { cls: 'dropdown termy-keybind-route' });
+        (Object.keys(ROUTE_LABELS) as KeyboardRoute[]).forEach((r) => {
+          const opt = routeSel.createEl('option', { value: r, text: ROUTE_LABELS[r] });
+          if (entry.route === r) opt.selected = true;
+        });
+        routeSel.addEventListener('change', () => {
+          entry.route = routeSel.value as KeyboardRoute;
+          if (entry.route !== 'termy') delete entry.action;
+          else if (!entry.action) entry.action = 'tab-new';
+          commit();
+          renderList();
+        });
+
+        const actionSel = row.createEl('select', { cls: 'dropdown termy-keybind-action' });
+        if (entry.route === 'termy') {
+          TERMY_ACTION_LIST.forEach((a) => {
+            const opt = actionSel.createEl('option', { value: a, text: ACTION_LABELS[a] });
+            if (entry.action === a) opt.selected = true;
+          });
+          actionSel.addEventListener('change', () => {
+            entry.action = actionSel.value as TermyKeyAction;
+            commit();
+          });
+        } else {
+          actionSel.createEl('option', { text: '—' });
+          actionSel.disabled = true;
+        }
+
+        const delBtn = row.createEl('button', { cls: 'termy-keybind-del clickable-icon' });
+        delBtn.setAttribute('aria-label', '删除这条规则');
+        setIcon(delBtn, 'trash-2');
+        delBtn.addEventListener('click', () => {
+          entries.splice(index, 1);
+          commit();
+          renderList();
+        });
+      });
+    };
+    renderList();
+
+    const actions = new Setting(card);
+    actions.addButton((b) => b.setButtonText('+ 添加规则').onClick(() => {
+      entries.unshift({ when: '', route: 'terminal' });
+      renderList();
+    }));
+    actions.addButton((b) => b.setButtonText('恢复默认').setWarning().onClick(() => {
+      entries = JSON.parse(DEFAULT_KEYBINDING_CONFIG_JSON) as KeybindingConfigEntry[];
+      commit();
+      renderList();
+    }));
+
+    // 高级：直接编辑 JSON（保留原始能力，展开时同步当前配置）
+    const details = card.createEl('details', { cls: 'termy-keybind-advanced' });
+    details.createEl('summary', { text: '高级：直接编辑 JSON' });
+    const ta = details.createEl('textarea', { cls: 'termy-keybinding-textarea' });
+    ta.rows = 14;
+    ta.value = this.context.plugin.settings.keybindings || DEFAULT_KEYBINDING_CONFIG_JSON;
+    const jsonStatus = details.createDiv({ cls: 'setting-item-description termy-keybinding-status' });
+    details.addEventListener('toggle', () => {
+      if (details.open) ta.value = this.context.plugin.settings.keybindings || DEFAULT_KEYBINDING_CONFIG_JSON;
+    });
+    const applyBtn = details.createEl('button', { cls: 'mod-cta termy-keybind-apply-json', text: '应用 JSON' });
+    applyBtn.addEventListener('click', () => {
+      const { error } = parseKeybindingConfigJson(ta.value);
+      if (error) {
+        jsonStatus.setText(`未应用：${error}`);
+        jsonStatus.addClass('mod-warning');
+        return;
+      }
+      entries = JSON.parse(ta.value) as KeybindingConfigEntry[];
+      commit();
+      renderList();
+      jsonStatus.setText('已应用。');
+      jsonStatus.removeClass('mod-warning');
+    });
+  }
+
+  /** 从设置读出规则条目；JSON 坏掉时回退默认，保证设置页始终能渲染。 */
+  private readKeybindingEntries(): KeybindingConfigEntry[] {
+    try {
+      const parsed = JSON.parse(this.context.plugin.settings.keybindings || DEFAULT_KEYBINDING_CONFIG_JSON);
+      if (Array.isArray(parsed)) return parsed as KeybindingConfigEntry[];
+    } catch {
+      /* 回退默认 */
+    }
+    return JSON.parse(DEFAULT_KEYBINDING_CONFIG_JSON) as KeybindingConfigEntry[];
   }
 
   /**

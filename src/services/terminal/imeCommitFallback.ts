@@ -8,6 +8,33 @@ interface ImeKeyboardEventLike {
   shiftKey?: boolean;
 }
 
+interface ImeBeforeInputLike {
+  inputType: string;
+}
+
+/**
+ * Decide whether a `beforeinput` event should arm the IME commit fallback.
+ *
+ * The fallback exists to re-deliver committed IME text that xterm occasionally
+ * drops. It must never fire for *mid-composition* results: streaming voice IMEs
+ * emit a `beforeinput` with `inputType === 'insertCompositionText'` for every
+ * partial recognition (already CJK, so `isImeCommitFallbackText` lets them
+ * through), and forwarding each partial appends it to the PTY instead of
+ * replacing the previous one — producing "这这这这这句这句话…" garbage. The real
+ * commit always arrives separately via `compositionend`, so only genuine
+ * non-composition `insertText` should arm the fallback here.
+ */
+export function shouldScheduleImeCommitFallbackForBeforeInput(
+  event: ImeBeforeInputLike,
+  isComposing: boolean,
+): boolean {
+  if (isComposing) {
+    return false;
+  }
+
+  return event.inputType === 'insertText';
+}
+
 const TEXT_INPUT_KEY_CODES = new Set([
   'Space',
   'Backquote',

@@ -1500,8 +1500,11 @@
   position: absolute;
   top: 0;
   left: 0;
-  z-index: -5;
-  opacity: 0;
+  /* z-index 必须高于渲染层：IME 合成预览（.composition-view）是本容器的子元素，
+     需要浮在终端画面之上才能显示拼音/语音输入法的未确认文本（preedit）。
+     绝不能给容器加 opacity:0 / 负 z-index —— 那会连带把预览浮层一起藏掉。
+     隐藏只针对下面的 helper-textarea 本身（已移到屏外 + 0 尺寸）。 */
+  z-index: 5;
   pointer-events: none;
 }
 .xterm-helper-textarea {
@@ -1518,6 +1521,25 @@
   padding: 0;
   border: 0;
   outline: none;
+}
+/* IME 合成预览浮层：拼音/语音输入法正在输入、尚未确认的文本（preedit）。
+   xterm 用 inline 样式把它定位到光标处，所以必须 position:absolute；上游 xterm.css
+   的这条规则没有进 Obsidian 实际加载的 styles.css，故在此显式补全，否则预览不可见。
+   做成「同色字 + 下划线」（像原生终端的 preedit）：字色取终端前景色、背景取终端
+   背景色把下方光标处字符遮住（浮层是盖在 canvas 上、不像原生那样 inline 推开文字，
+   背景透明会与下层字符重叠糊掉），再用下划线标识这是未确认文本。 */
+.composition-view {
+  display: none;
+  position: absolute;
+  z-index: 1;
+  white-space: nowrap;
+  background-color: var(--terminal-bg-color, var(--background-primary, #1e1e1e));
+  color: var(--terminal-fg-color, var(--text-normal, #cccccc));
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.composition-view.active {
+  display: block;
 }
 /* Xterm screen */
 .xterm-screen {
@@ -2382,4 +2404,70 @@ img.termy-tab-status-icon {
 /* 隐藏 Termy 终端 view 的 Obsidian 头部栏（后退/前进/标题/更多选项），界面更干净 */
 .workspace-leaf-content[data-type="terminal-view-dev"] .view-header {
   display: none;
+}
+
+/* ==================== 键盘快捷键配置编辑器 ==================== */
+/* 可视化规则列表：每条一行（按键按钮 + 去向下拉 + 动作下拉 + 删除） */
+.termy-keybind-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 8px 0;
+}
+.termy-keybind-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.termy-keybind-key {
+  flex: 0 0 auto;
+  min-width: 132px;
+  font-family: var(--font-monospace, monospace);
+  font-size: 12px;
+  text-align: center;
+  cursor: pointer;
+}
+.termy-keybind-key.is-empty {
+  color: var(--text-muted);
+  font-style: italic;
+}
+.termy-keybind-key.is-capturing {
+  border-color: var(--interactive-accent);
+  color: var(--interactive-accent);
+}
+.termy-keybind-action {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.termy-keybind-del {
+  flex: 0 0 auto;
+}
+.termy-keybind-advanced {
+  margin-top: 12px;
+}
+.termy-keybind-advanced summary {
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+.termy-keybind-apply-json {
+  margin-top: 8px;
+}
+/* 高级 JSON 编辑框：占满整行、等宽字体 */
+.termy-keybinding-textarea {
+  width: 100%;
+  min-height: 240px;
+  margin-top: 8px;
+  font-family: var(--font-monospace, monospace);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre;
+  tab-size: 2;
+  resize: vertical;
+}
+.termy-keybinding-status {
+  margin-top: 4px;
+}
+.termy-keybinding-status.mod-warning {
+  color: var(--text-error);
 }

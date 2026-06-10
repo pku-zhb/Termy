@@ -12,7 +12,16 @@ import type { PtyClient } from '@/services/server/ptyClient';
 import type { ForegroundInfo, PtyConfig, ShellEvent, ShellEventSource } from '@/services/server/types';
 import type { DefaultShellOption } from './terminalService';
 import { EnhancedKeyboardProtocol, formatPastedTerminalText } from './enhancedKeyboardProtocol';
-import { isImeCommitFallbackText } from './imeCommitFallback';
+import {
+  isImeCommitFallbackText,
+  shouldScheduleImeCommitFallbackForBeforeInput,
+} from './imeCommitFallback';
+import {
+  matchKeybinding,
+  DEFAULT_KEYBINDING_RULES,
+  type KeybindingMatch,
+  type KeybindingRule,
+} from './keybindingRules';
 import {
   createSynchronizedOutputCompatibilityState,
   filterSynchronizedOutputScrollbackPurge,
@@ -143,6 +152,8 @@ export interface TerminalOptions {
   enableBlur?: boolean;
   blurAmount?: number;
   textOpacity?: number;
+  /** 键盘路由规则（由用户设置编译而来）；省略时用内置默认。 */
+  keybindingRules?: KeybindingRule[];
 }
 
 /** Search state change callback */
@@ -215,8 +226,12 @@ export class TerminalInstance {
   private readonly inputBatchIntervalMs = 4;
   private pendingImeCommitFallbackTimer: number | null = null;
   private pendingImeCommitFallbackText = '';
+  private isComposing = false;
   private lastXtermInputData = '';
   private lastXtermInputDataAt = 0;
+
+  // 键盘路由规则（可被用户设置覆盖、可热更新）
+  private keybindingRules: KeybindingRule[] = DEFAULT_KEYBINDING_RULES;
 
   // Context menu callbacks for actions like split/new terminal that need external handling
   private contextMenuCallbacks: {
@@ -257,6 +272,9 @@ export class TerminalInstance {
   constructor(options: TerminalOptions = {}) {
     this.id = `terminal-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
     this.options = options;
+    if (options.keybindingRules && options.keybindingRules.length > 0) {
+      this.keybindingRules = options.keybindingRules;
+    }
     this.shellType = options.shellType || 'default';
     this.titleState = new TerminalTitleState(t('terminal.defaultTitle'));
     this.currentFontSize = options.fontSize ?? 14;
@@ -716,18 +734,24 @@ export class TerminalInstance {
     });
 
     this.xterm.attachCustomKeyEventHandler((event: KeyboardEvent) => {
-      // Use physical key codes for Opt tab navigation so macOS Alt-generated
-      // characters do not leak into the shell.
-      const navAction = this.matchTabNavKey(event);
-      if (navAction) {
-        if (event.type === 'keydown') {
-          event.preventDefault();
-          event.stopPropagation();
-          this.tabNavCallback?.(navAction);
-        }
-        return false;
+      // IME 合成中的按键绝不能被规则表按物理键码误命中：保持原放行路径。
+      const legacyKeyCode = (event as unknown as { keyCode?: number }).keyCode;
+      if (event.isComposing || event.key === 'Process' || legacyKeyCode === 229) {
+        return keyboardProtocol.handleKeyboardEvent(event);
       }
 
+      // Windows 输入模式有独立的按键编码，跳过通用规则表、走原有协议。
+      if (this.win32InputModeEnabled) {
+        return keyboardProtocol.handleKeyboardEvent(event);
+      }
+
+      // 数据驱动的键盘路由：Opt→Termy、Cmd→Obsidian(+复制粘贴)、Ctrl→程序(+黑名单)。
+      const match = matchKeybinding(event, this.keybindingRules);
+      if (match) {
+        return this.applyKeybindingRoute(match, event);
+      }
+
+      // 未命中任何规则：交给底层协议（文本输入编码、默认透传给程序）。
       return keyboardProtocol.handleKeyboardEvent(event);
     });
   }
@@ -1147,68 +1171,40 @@ export class TerminalInstance {
       return;
     }
 
-    this.addDomEventListener(textarea, 'beforeinput', (event: InputEvent) => {
-      if (event.inputType === 'insertText' || event.inputType === 'insertCompositionText') {
-        this.scheduleImeCommitFallback(event.data);
-      }
+    this.isComposing = false;
+
+    // 跟踪合成态：流式语音输入法会在 compositionstart..compositionend 之间不断发出
+    // insertCompositionText 中间结果（已是中文，能通过 isImeCommitFallbackText），
+    // 这些中间态绝不能逐段补发——否则会在 PTY 里一段段 append 而非替换。最终提交只
+    // 认 compositionend 一次。
+    this.addDomEventListener(textarea, 'compositionstart', () => {
+      this.isComposing = true;
     });
     this.addDomEventListener(textarea, 'compositionend', (event: CompositionEvent) => {
+      this.isComposing = false;
       this.scheduleImeCommitFallback(event.data);
+    });
+    this.addDomEventListener(textarea, 'beforeinput', (event: InputEvent) => {
+      if (shouldScheduleImeCommitFallbackForBeforeInput(event, this.isComposing)) {
+        this.scheduleImeCommitFallback(event.data);
+      }
     });
   }
 
   private setupKeyboardShortcuts(container: HTMLElement): void {
+    // 搜索 / 字体 / 全选等快捷键已统一交给键盘路由表（见 attachCustomKeyEventHandler 里的
+    // matchKeybinding）。这里只保留「搜索框可见时按 Esc 关闭」这个搜索 UI 的局部行为；
+    // 其余 Esc 照常透传给程序（vim/claude 的 Esc 不受影响）。
     this.addDomEventListener(container, 'keydown', (e: KeyboardEvent) => {
-      const isCtrlOrCmd = e.ctrlKey || e.metaKey;
-      
-      // Ctrl+Shift+A: Select all
-      if (isCtrlOrCmd && e.shiftKey && e.key === 'A') {
-        e.preventDefault();
-        e.stopPropagation();
-        this.xterm.selectAll();
-        return;
-      }
-      
-      // Ctrl+F: Search
-      if (isCtrlOrCmd && e.key === 'f') {
-        e.preventDefault();
-        e.stopPropagation();
-        this.toggleSearch();
-        return;
-      }
-      
-      // Escape: Close search
       if (e.key === 'Escape' && this.searchVisible) {
         e.preventDefault();
         this.hideSearch();
-        return;
-      }
-      
-      // Ctrl+plus/equal: Increase font size
-      if (isCtrlOrCmd && (e.key === '=' || e.key === '+')) {
-        e.preventDefault();
-        this.increaseFontSize();
-        return;
-      }
-      
-      // Ctrl+minus: Decrease font size
-      if (isCtrlOrCmd && e.key === '-') {
-        e.preventDefault();
-        this.decreaseFontSize();
-        return;
-      }
-      
-      // Ctrl+0: Reset font size
-      if (isCtrlOrCmd && e.key === '0') {
-        e.preventDefault();
-        this.resetFontSize();
-        return;
       }
     });
 
-    // Ctrl+wheel: Adjust font size
+    // Ctrl+wheel: 字体缩放手势（Cmd+滚轮不再缩放，交回宿主）。
     this.addDomEventListener(container, 'wheel', (e: WheelEvent) => {
-      if (e.ctrlKey || e.metaKey) {
+      if (e.ctrlKey) {
         e.preventDefault();
         if (e.deltaY < 0) {
           this.increaseFontSize();
@@ -1913,23 +1909,66 @@ export class TerminalInstance {
   /**
    * Match Opt tab navigation keys using physical key codes.
    */
-  private matchTabNavKey(event: KeyboardEvent): TermyTabNavAction | null {
-    const legacyKeyCode = (event as unknown as { keyCode?: number })['keyCode'];
-    if (event.isComposing || event.key === 'Process' || legacyKeyCode === 229) return null;
-    if (!event.altKey || event.ctrlKey || event.metaKey) return null;
-    const code = event.code;
-    if (code === 'Tab') return event.shiftKey ? { type: 'prev' } : { type: 'next' };
-    if (event.shiftKey) return null;
-    if (code === 'KeyT') return { type: 'new' };
-    if (code === 'KeyW') return { type: 'close' };
-    if (code === 'KeyR') return { type: 'rename' };
-    const digit = /^Digit([0-9])$/.exec(code);
-    if (digit) {
-      const d = parseInt(digit[1], 10);
-      // 1-9 select tabs 1-9; 0 selects tab 10.
-      return { type: 'goto', index: d === 0 ? 9 : d - 1 };
+  /**
+   * 执行一条键盘路由结果。返回值遵循 xterm attachCustomKeyEventHandler 约定：
+   * true = 让 xterm 编码并发给程序；false = xterm 不处理这个键。
+   */
+  private applyKeybindingRoute(match: KeybindingMatch, event: KeyboardEvent): boolean {
+    switch (match.route) {
+      case 'terminal':
+        // 透传给终端里的程序（Ctrl 行编辑、中断、Ctrl+V 图片粘贴等）。
+        return true;
+      case 'obsidian':
+        // 还给宿主：不 preventDefault，让事件冒泡到 Obsidian 的快捷键系统
+        // （如 Ctrl+Tab 切标签、Ctrl+1~5 等用户自定义键）。xterm 自身不处理。
+        return false;
+      case 'termy':
+        if (event.type === 'keydown') {
+          event.preventDefault();
+          event.stopPropagation();
+          this.runTermyKeyAction(match);
+        }
+        return false;
+      default:
+        return false;
     }
-    return null;
+  }
+
+  private runTermyKeyAction(match: KeybindingMatch): void {
+    switch (match.action) {
+      case 'tab-new': this.tabNavCallback?.({ type: 'new' }); break;
+      case 'tab-close': this.tabNavCallback?.({ type: 'close' }); break;
+      case 'tab-rename': this.tabNavCallback?.({ type: 'rename' }); break;
+      case 'tab-next': this.tabNavCallback?.({ type: 'next' }); break;
+      case 'tab-prev': this.tabNavCallback?.({ type: 'prev' }); break;
+      case 'tab-goto':
+        if (match.tabIndex !== undefined) {
+          this.tabNavCallback?.({ type: 'goto', index: match.tabIndex });
+        }
+        break;
+      case 'search-toggle': this.toggleSearch(); break;
+      case 'font-increase': this.increaseFontSize(); break;
+      case 'font-decrease': this.decreaseFontSize(); break;
+      case 'font-reset': this.resetFontSize(); break;
+      case 'copy': this.copySelectionToClipboard(); break;
+      case 'paste': void this.pasteFromClipboard(); break;
+      case 'newline':
+        // 与 bracketed paste 一致地注入换行，让 Codex/Claude 当多行编辑而非提交。
+        this.flushPendingInput();
+        this.pasteText('\n');
+        break;
+    }
+  }
+
+  private copySelectionToClipboard(): void {
+    const selection = this.xterm.getSelection();
+    if (!selection) return;
+    void this.writeToClipboard(selection, () => this.xterm.clearSelection());
+  }
+
+  /** 热更新键盘路由规则（设置变更时由 TerminalService 推送给每个活动终端）。 */
+  setKeybindingRules(rules: KeybindingRule[]): void {
+    this.keybindingRules = rules.length > 0 ? rules : DEFAULT_KEYBINDING_RULES;
   }
 
   setDefaultShellMenuCallbacks(
@@ -2229,6 +2268,10 @@ export class TerminalInstance {
    */
   getEffectiveBackgroundColor(): string {
     return this.getTheme().background;
+  }
+
+  getEffectiveForegroundColor(): string {
+    return this.getTheme().foreground;
   }
 
   /**

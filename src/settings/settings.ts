@@ -4,6 +4,7 @@
  */
 
 import type { VisibilityConfig } from '@/services/visibility';
+import { DEFAULT_KEYBINDING_CONFIG_JSON } from '@/services/terminal/keybindingRules';
 
 /** Terminal programs that can be launched from the shell selector when installed */
 export type TerminalShellType = 'tmux';
@@ -100,6 +101,9 @@ export interface TerminalSettings {
 
   // Latest version whose changelog modal has already been shown
   lastSeenChangelogVersion: string;
+
+  // 键盘路由配置（when→route 的 JSON 文本，用户可在设置里编辑）。
+  keybindings: string;
 
   // Debug settings
   enableDebugLog: boolean;
@@ -262,5 +266,6 @@ export const DEFAULT_TERMINAL_SETTINGS: TerminalSettings = {
   },
   presetScripts: [...DEFAULT_PRESET_SCRIPTS],
   lastSeenChangelogVersion: '',
+  keybindings: DEFAULT_KEYBINDING_CONFIG_JSON,
   enableDebugLog: false,
 };
