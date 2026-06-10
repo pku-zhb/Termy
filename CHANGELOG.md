@@ -5,6 +5,18 @@ All notable changes to Termy will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.0] - 2026-06-10
+
+### Added
+- Configurable keyboard routing: Opt-shortcuts go to Termy, Cmd-shortcuts to Obsidian, Ctrl-chords to the running program (with a blacklist), all adjustable via a JSON rule list in settings.
+- Clickable `file://` links in terminal output. Links to vault files open inside Obsidian (with `#L12`-style line anchors); other paths open with the system default. Works with raw spaces, percent-encoding, and CJK filenames.
+- Full support for links hard-wrapped by TUI frameworks (Claude Code, Codex, tmux): wrapped lines are re-joined semantically, word-wrap-eaten spaces are recovered via click-time fallback candidates, adjacent links never merge, and hovering any row highlights the whole link with precise per-row underlines.
+- Backend card in settings: shows termy-server status and Homebrew install/upgrade guidance.
+- Closing the last terminal tab now respawns a fresh terminal instead of closing the whole view.
+
+### Fixed
+- IME composition preview (pinyin and other preedit input) was invisible inside the terminal; composing text now renders with proper colors over the canvas.
+
 ## [1.4.1] - 2026-05-16
 
 ### Fixed
