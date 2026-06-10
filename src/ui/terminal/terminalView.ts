@@ -64,7 +64,7 @@ type XtermDisposable = import('@xterm/xterm').IDisposable;
 type XtermLink = import('@xterm/xterm').ILink;
 type XtermBufferRange = import('@xterm/xterm').IBufferRange;
 
-export const TERMINAL_VIEW_TYPE = 'terminal-view-dev';
+export const TERMINAL_VIEW_TYPE = 'terminal-view';
 const IDLE_SHELL_PROCESS_NAMES = new Set([
   'bash',
   'cmd',
@@ -1689,7 +1689,7 @@ export class TerminalView extends ItemView {
     const appWithPlugins = this.app as typeof this.app & {
       plugins?: { getPlugin?: (id: string) => unknown };
     };
-    const plugin = appWithPlugins.plugins?.getPlugin?.('termy-dev');
+    const plugin = appWithPlugins.plugins?.getPlugin?.('termy');
     if (!this.isTerminalPlugin(plugin)) return null;
     return plugin;
   }

@@ -28,7 +28,7 @@ import {
 } from './types';
 import { PtyClient } from './ptyClient';
 
-const DEV_RELOAD_REQUEST_FILE = '.termy-dev-reload.json';
+const DEV_RELOAD_REQUEST_FILE = '.termy-reload.json';
 const DEV_RELOAD_PHASE_INSTALLING = 'installing';
 
 interface ServerExitDetails {
@@ -811,7 +811,7 @@ export class ServerManager {
       }
 
       const request = JSON.parse(this.fs.readFileSync(requestPath, 'utf-8')) as DevReloadRequest;
-      if (request.pluginId && request.pluginId !== 'termy-dev') {
+      if (request.pluginId && request.pluginId !== 'termy') {
         return false;
       }
       if (request.phase !== DEV_RELOAD_PHASE_INSTALLING) {
