@@ -2,6 +2,9 @@
 // WebSocket server for the terminal server that handles PTY module messages
 
 use futures_util::{SinkExt, StreamExt};
+use serde::{Deserialize, Serialize};
+use std::fs;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use tokio::net::TcpListener;
@@ -43,6 +46,63 @@ fn now_secs() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+struct ServerRegistryEntry {
+    pid: u32,
+    port: u16,
+    parent_pid: u32,
+    started_at: u64,
+}
+
+fn server_registry_path(parent_pid: u32) -> PathBuf {
+    std::env::temp_dir().join(format!(
+        "termy-server-{}-parent-{}.json",
+        current_user_key(),
+        parent_pid
+    ))
+}
+
+#[cfg(unix)]
+fn current_user_key() -> String {
+    unsafe { libc::geteuid() }.to_string()
+}
+
+#[cfg(not(unix))]
+fn current_user_key() -> String {
+    std::env::var("USERNAME")
+        .or_else(|_| std::env::var("USER"))
+        .unwrap_or_else(|_| "unknown".to_string())
+}
+
+fn write_server_registry(parent_pid: u32, port: u16) {
+    let entry = ServerRegistryEntry {
+        pid: std::process::id(),
+        port,
+        parent_pid,
+        started_at: now_secs(),
+    };
+    let path = server_registry_path(parent_pid);
+    match serde_json::to_vec(&entry)
+        .map_err(|error| error.to_string())
+        .and_then(|data| fs::write(&path, data).map_err(|error| error.to_string()))
+    {
+        Ok(()) => log_debug!("已写入 server registry: {}", path.display()),
+        Err(error) => {
+            log_error!("写入 server registry 失败 {}: {}", path.display(), error);
+        }
+    }
+}
+
+fn superseded_by_newer_server(parent_pid: u32, current_pid: u32) -> Option<ServerRegistryEntry> {
+    let path = server_registry_path(parent_pid);
+    let data = fs::read_to_string(path).ok()?;
+    let entry = serde_json::from_str::<ServerRegistryEntry>(&data).ok()?;
+    if entry.parent_pid == parent_pid && entry.pid != current_pid && process_exists(entry.pid) {
+        return Some(entry);
+    }
+    None
 }
 
 /// 连接生命周期 RAII：进入 +1、离开 -1，并刷新最后活跃时间
@@ -96,10 +156,14 @@ impl Server {
 
         // 初始化最后活跃时间（启动后有宽限期等待前端首次连接）
         LAST_ACTIVE_SECS.store(now_secs(), Ordering::SeqCst);
+        if let Some(parent_pid) = self.config.parent_pid {
+            write_server_registry(parent_pid, port);
+        }
 
         let router = Arc::new(MessageRouter::new());
         let watchdog_router = Arc::clone(&router);
         let parent_pid = self.config.parent_pid;
+        let current_pid = std::process::id();
 
         // Self-exit watchdog:
         // - Exit quickly when there are no sessions and no frontend connection.
@@ -123,6 +187,18 @@ impl Server {
                 let active = ACTIVE_CONNECTIONS.load(Ordering::SeqCst);
                 let idle = now_secs().saturating_sub(LAST_ACTIVE_SECS.load(Ordering::SeqCst));
                 if active == 0 {
+                    if let Some(pid) = parent_pid {
+                        if let Some(newer) = superseded_by_newer_server(pid, current_pid) {
+                            log_info!(
+                                "检测到同一父进程下已有新的 termy-server(pid={}, port={})，清理旧 PTY 会话并退出",
+                                newer.pid,
+                                newer.port
+                            );
+                            watchdog_router.pty_handler().cleanup_all().await;
+                            std::process::exit(0);
+                        }
+                    }
+
                     let has_sessions = watchdog_router.pty_handler().has_sessions().await;
                     if !has_sessions && idle >= EMPTY_IDLE_TIMEOUT_SECS {
                         log_info!(
