@@ -29,12 +29,25 @@ export class PtyClient extends ModuleClient {
   
   /** Promise resolvers waiting for init_complete responses */
   private initResolvers: Map<string, { resolve: (sessionId: string) => void; reject: (error: Error) => void }> = new Map();
+
+  /** Promise resolvers waiting for attach_complete responses */
+  private attachResolvers: Map<string, { resolve: (attached: boolean) => void; reject: (error: Error) => void }> = new Map();
+
+  /** Session destroy requests made while the WebSocket is disconnected */
+  private pendingDestroySessionIds: Set<string> = new Set();
   
   /** Temporarily stores the init request ID for response correlation */
   private pendingInitId: string | null = null;
 
   constructor() {
     super('pty');
+  }
+
+  override setWebSocket(ws: WebSocket | null): void {
+    super.setWebSocket(ws);
+    if (this.isConnected()) {
+      this.flushPendingDestroySessions();
+    }
   }
 
   /**
@@ -88,6 +101,37 @@ export class PtyClient extends ModuleClient {
         cols: config.cols,
         rows: config.rows,
       });
+    });
+  }
+
+  /**
+   * Attach the current WebSocket connection to an existing PTY session.
+   */
+  async attach(sessionId: string): Promise<boolean> {
+    if (!this.isConnected()) {
+      throw new Error('WebSocket not connected');
+    }
+
+    return new Promise((resolve, reject) => {
+      const timeout = window.setTimeout(() => {
+        this.attachResolvers.delete(sessionId);
+        reject(new Error('PTY attach timeout'));
+      }, 5000);
+
+      this.attachResolvers.set(sessionId, {
+        resolve: (attached: boolean) => {
+          window.clearTimeout(timeout);
+          this.attachResolvers.delete(sessionId);
+          resolve(attached);
+        },
+        reject: (error: Error) => {
+          window.clearTimeout(timeout);
+          this.attachResolvers.delete(sessionId);
+          reject(error);
+        },
+      });
+
+      this.send('attach', { session_id: sessionId });
     });
   }
 
@@ -154,9 +198,25 @@ export class PtyClient extends ModuleClient {
    * @param sessionId Session ID
    */
   destroySession(sessionId: string): void {
-    this.send('destroy', { session_id: sessionId });
     // Clear listeners for this session
     this.sessionListeners.delete(sessionId);
+
+    if (!this.isConnected()) {
+      this.pendingDestroySessionIds.add(sessionId);
+      return;
+    }
+
+    this.send('destroy', { session_id: sessionId });
+  }
+
+  private flushPendingDestroySessions(): void {
+    for (const sessionId of Array.from(this.pendingDestroySessionIds)) {
+      if (!this.isConnected()) {
+        return;
+      }
+      this.pendingDestroySessionIds.delete(sessionId);
+      this.send('destroy', { session_id: sessionId });
+    }
   }
 
   // ==================== Session-scoped event registration ====================
@@ -341,6 +401,15 @@ export class PtyClient extends ModuleClient {
           }
         }
         break;
+
+      case 'attach_complete':
+        if (sessionId) {
+          const resolver = this.attachResolvers.get(sessionId);
+          if (resolver) {
+            resolver.resolve(Boolean(msg.success));
+          }
+        }
+        break;
         
       case 'output':
         // Output data (JSON-formatted output; binary data is handled in handleBinaryMessage)
@@ -432,6 +501,8 @@ export class PtyClient extends ModuleClient {
   override destroy(): void {
     this.sessionListeners.clear();
     this.initResolvers.clear();
+    this.attachResolvers.clear();
+    this.pendingDestroySessionIds.clear();
     this.pendingInitId = null;
     super.destroy();
   }

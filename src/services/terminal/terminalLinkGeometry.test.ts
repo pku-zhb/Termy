@@ -14,6 +14,11 @@ import {
   parseTerminalFileUriLinks,
   terminalFileUriLooksOpenAtEnd,
 } from './terminalFileLinks.ts';
+import {
+  parseTerminalWebLinks,
+  terminalWebUrlLooksLikeContinuation,
+  terminalWebUrlLooksOpenAtEnd,
+} from './terminalWebLinks.ts';
 
 // 把一段文本铺成终端单元格：CJK（含全角标点）占 2 列并补一个宽度 0 的占位单元格，
 // 其余字符占 1 列。用于在没有 xterm 运行时的情况下复刻 getCell/getWidth/getChars。
@@ -288,4 +293,42 @@ test('mid-line link references join across wraps like line-start ones', () => {
       'file:///Users/a/00 Temp/存储超级周期_长协扩产产能_全综述_20260610.md',
     );
   }
+});
+
+test('link window joins hard-wrapped web URLs with URL-shaped continuation rows', () => {
+  const row0 = 'see https://example.com/docs/';
+  const row1 = '  path/to/page?query=value';
+  const buffer = bufferFromLines([bufferLineFromText(row0), bufferLineFromText(row1)]);
+  const looksOpenAtEnd = (text: string): boolean =>
+    terminalFileUriLooksOpenAtEnd(text) || terminalWebUrlLooksOpenAtEnd(text);
+  const shouldJoin = (leftText: string, rightText: string): boolean =>
+    terminalFileUriLooksOpenAtEnd(leftText)
+    || (terminalWebUrlLooksOpenAtEnd(leftText) && terminalWebUrlLooksLikeContinuation(rightText));
+
+  for (const lineNumber of [0, 1]) {
+    const window = buildTerminalLinkWindow(buffer, lineNumber, looksOpenAtEnd, shouldJoin);
+    assert.ok(window);
+    assert.equal(
+      parseTerminalWebLinks(window.text)[0]?.uri,
+      'https://example.com/docs/path/to/page?query=value',
+    );
+    assert.deepEqual(window.hardJunctions, [row0.length]);
+  }
+});
+
+test('link window does not join complete web URLs into ordinary prose rows', () => {
+  const buffer = bufferFromLines([
+    bufferLineFromText('see https://example.com/docs'),
+    bufferLineFromText('plain prose should stay separate'),
+  ]);
+  const looksOpenAtEnd = (text: string): boolean =>
+    terminalFileUriLooksOpenAtEnd(text) || terminalWebUrlLooksOpenAtEnd(text);
+  const shouldJoin = (leftText: string, rightText: string): boolean =>
+    terminalFileUriLooksOpenAtEnd(leftText)
+    || (terminalWebUrlLooksOpenAtEnd(leftText) && terminalWebUrlLooksLikeContinuation(rightText));
+
+  const window = buildTerminalLinkWindow(buffer, 0, looksOpenAtEnd, shouldJoin);
+  assert.ok(window);
+  assert.equal(window.text, 'see https://example.com/docs');
+  assert.equal(parseTerminalWebLinks(window.text)[0]?.uri, 'https://example.com/docs');
 });

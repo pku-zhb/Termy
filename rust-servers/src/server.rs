@@ -1,12 +1,12 @@
 // WebSocket server implementation
 // WebSocket server for the terminal server that handles PTY module messages
 
-use tokio::net::TcpListener;
-use tokio_tungstenite::{accept_async, tungstenite::Message};
-use futures_util::{StreamExt, SinkExt};
-use std::sync::Arc;
+use futures_util::{SinkExt, StreamExt};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::Arc;
+use tokio::net::TcpListener;
 use tokio::sync::Mutex as TokioMutex;
+use tokio_tungstenite::{accept_async, tungstenite::Message};
 
 use crate::router::{MessageRouter, ModuleType, RouterError, ServerResponse};
 
@@ -68,6 +68,7 @@ impl Drop for ConnectionGuard {
 /// WebSocket server configuration
 pub struct ServerConfig {
     pub port: u16,
+    pub parent_pid: Option<u32>,
 }
 
 /// WebSocket server
@@ -91,26 +92,53 @@ impl Server {
 
         // Write port information to stdout in JSON format
         // The TypeScript side parses this JSON to get the port number
-        println!(
-            r#"{{"port": {}, "pid": {}}}"#,
-            port,
-            std::process::id()
-        );
+        println!(r#"{{"port": {}, "pid": {}}}"#, port, std::process::id());
 
         // 初始化最后活跃时间（启动后有宽限期等待前端首次连接）
         LAST_ACTIVE_SECS.store(now_secs(), Ordering::SeqCst);
 
-        // 自我了断看门狗：无活跃连接持续超时则退出（彻底避免 reload 残留）
+        let router = Arc::new(MessageRouter::new());
+        let watchdog_router = Arc::clone(&router);
+        let parent_pid = self.config.parent_pid;
+
+        // Self-exit watchdog:
+        // - Exit quickly when there are no sessions and no frontend connection.
+        // - Keep sessions through temporary disconnects, but clean them up when the
+        //   parent process dies or the disconnected grace window expires.
         tokio::spawn(async move {
-            const IDLE_TIMEOUT_SECS: u64 = 30;
+            const EMPTY_IDLE_TIMEOUT_SECS: u64 = 30;
+            const SESSION_DISCONNECTED_TIMEOUT_SECS: u64 = 30 * 60;
             let mut ticker = tokio::time::interval(std::time::Duration::from_secs(5));
             loop {
                 ticker.tick().await;
+
+                if let Some(pid) = parent_pid {
+                    if !process_exists(pid) {
+                        log_info!("父进程 {} 已不存在，清理 PTY 会话并退出", pid);
+                        watchdog_router.pty_handler().cleanup_all().await;
+                        std::process::exit(0);
+                    }
+                }
+
                 let active = ACTIVE_CONNECTIONS.load(Ordering::SeqCst);
                 let idle = now_secs().saturating_sub(LAST_ACTIVE_SECS.load(Ordering::SeqCst));
-                if active == 0 && idle >= IDLE_TIMEOUT_SECS {
-                    log_info!("无活跃 WebSocket 连接已 {}s，自我退出以避免残留", idle);
-                    std::process::exit(0);
+                if active == 0 {
+                    let has_sessions = watchdog_router.pty_handler().has_sessions().await;
+                    if !has_sessions && idle >= EMPTY_IDLE_TIMEOUT_SECS {
+                        log_info!(
+                            "无活跃 WebSocket 连接且无 PTY 会话已 {}s，自我退出以避免残留",
+                            idle
+                        );
+                        std::process::exit(0);
+                    }
+                    if has_sessions && idle >= SESSION_DISCONNECTED_TIMEOUT_SECS {
+                        log_info!(
+                            "无活跃 WebSocket 连接但仍有 PTY 会话已 {}s，清理会话并退出",
+                            idle
+                        );
+                        watchdog_router.pty_handler().cleanup_all().await;
+                        std::process::exit(0);
+                    }
                 }
             }
         });
@@ -120,8 +148,9 @@ impl Server {
             log_info!("正在监听 WebSocket 连接...");
             while let Ok((stream, addr)) = listener.accept().await {
                 log_debug!("接受来自 {} 的连接", addr);
+                let router = Arc::clone(&router);
                 tokio::spawn(async move {
-                    if let Err(e) = handle_connection(stream).await {
+                    if let Err(e) = handle_connection(stream, router).await {
                         log_error!("连接处理错误: {}", e);
                     }
                 });
@@ -137,18 +166,23 @@ impl Server {
 // ============================================================================
 
 /// WebSocket sender type alias
-pub type WsSender = Arc<TokioMutex<futures_util::stream::SplitSink<
-    tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
-    Message
->>>;
+pub type WsSender = Arc<
+    TokioMutex<
+        futures_util::stream::SplitSink<
+            tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
+            Message,
+        >,
+    >,
+>;
 
 /// Handle a single WebSocket connection
 async fn handle_connection(
     stream: tokio::net::TcpStream,
+    router: Arc<MessageRouter>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Upgrade to WebSocket
     let ws_stream = accept_async(stream).await?;
-    
+
     log_info!("WebSocket 连接已建立");
 
     // 连接计数（RAII：函数返回时自动 -1，供自我了断看门狗判断）
@@ -157,27 +191,20 @@ async fn handle_connection(
     // Split the read and write streams
     let (ws_sender, mut ws_receiver) = ws_stream.split();
     let ws_sender: WsSender = Arc::new(TokioMutex::new(ws_sender));
-    
-    // Create the message router
-    let router = Arc::new(MessageRouter::new());
-    
+
     // Set the WebSocket sender (used for PTY output)
     router.set_ws_sender(Arc::clone(&ws_sender)).await;
-    
+
     // Message handling loop
     while let Some(msg_result) = ws_receiver.next().await {
         match msg_result {
             Ok(msg) => {
                 log_debug!("收到消息类型: {:?}", std::mem::discriminant(&msg));
-                
+
                 match msg {
                     Message::Text(text) => {
                         // Handle text messages
-                        if let Err(e) = handle_text_message(
-                            &text,
-                            &router,
-                            &ws_sender
-                        ).await {
+                        if let Err(e) = handle_text_message(&text, &router, &ws_sender).await {
                             log_error!("消息处理错误: {}", e);
                         }
                     }
@@ -185,18 +212,18 @@ async fn handle_connection(
                         // Binary data, written to the PTY
                         // Format: [session_id_length: u8][session_id: bytes][data: bytes]
                         log_debug!("收到二进制数据: {} 字节", data.len());
-                        
+
                         if data.len() < 2 {
                             log_error!("二进制数据格式错误: 数据太短");
                             continue;
                         }
-                        
+
                         let session_id_len = data[0] as usize;
                         if data.len() < 1 + session_id_len {
                             log_error!("二进制数据格式错误: session_id 长度不足");
                             continue;
                         }
-                        
+
                         let session_id = match std::str::from_utf8(&data[1..1 + session_id_len]) {
                             Ok(s) => s,
                             Err(e) => {
@@ -204,11 +231,16 @@ async fn handle_connection(
                                 continue;
                             }
                         };
-                        
+
                         let pty_data = &data[1 + session_id_len..];
-                        log_debug!("写入 PTY: session_id={}, {} 字节", session_id, pty_data.len());
-                        
-                        if let Err(e) = router.pty_handler().write_data(session_id, pty_data).await {
+                        log_debug!(
+                            "写入 PTY: session_id={}, {} 字节",
+                            session_id,
+                            pty_data.len()
+                        );
+
+                        if let Err(e) = router.pty_handler().write_data(session_id, pty_data).await
+                        {
                             log_error!("写入 PTY 失败: session_id={}, {}", session_id, e);
                         }
                     }
@@ -235,13 +267,26 @@ async fn handle_connection(
             }
         }
     }
-    
+
     log_info!("WebSocket 连接已关闭");
-    
-    // Clean up all PTY sessions
-    router.pty_handler().cleanup_all().await;
-    
+    router.clear_ws_sender_if_current(&ws_sender).await;
+
     Ok(())
+}
+
+#[cfg(unix)]
+fn process_exists(pid: u32) -> bool {
+    let result = unsafe { libc::kill(pid as libc::pid_t, 0) };
+    if result == 0 {
+        return true;
+    }
+
+    std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+}
+
+#[cfg(not(unix))]
+fn process_exists(_pid: u32) -> bool {
+    true
 }
 
 /// Handle a text message
@@ -254,7 +299,7 @@ async fn handle_text_message(
     match router.parse_message(text) {
         Ok(msg) => {
             let module = msg.module;
-            
+
             // Route the message to the matching module
             match router.route(msg).await {
                 Ok(Some(response)) => {
@@ -276,14 +321,14 @@ async fn handle_text_message(
         Err(e) => {
             // Message parsing failed
             log_error!("消息解析错误: {}", e);
-            
+
             // Try to extract the module field from the raw JSON for the error response
             let module = extract_module_from_json(text);
             let error_response = create_parse_error_response(module, &e);
             send_response(ws_sender, &error_response).await?;
         }
     }
-    
+
     Ok(())
 }
 
@@ -297,18 +342,14 @@ fn extract_module_from_json(text: &str) -> ModuleType {
             }
         }
     }
-    
+
     // Default to the Pty module
     ModuleType::Pty
 }
 
 /// Create a parse error response
 fn create_parse_error_response(module: ModuleType, error: &RouterError) -> ServerResponse {
-    ServerResponse::error(
-        module,
-        "PARSE_ERROR",
-        &format!("消息解析失败: {}", error)
-    )
+    ServerResponse::error(module, "PARSE_ERROR", &format!("消息解析失败: {}", error))
 }
 
 /// Send a response message

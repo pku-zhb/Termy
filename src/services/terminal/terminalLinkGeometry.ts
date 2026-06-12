@@ -62,6 +62,8 @@ export interface TerminalLinkWindow {
   hardJunctions: number[];
 }
 
+export type TerminalHardWrapJoinPredicate = (leftText: string, rightText: string) => boolean;
+
 // 单方向最多跨多少个硬换行行组，防止在异常输出上无限拼接。
 const HARD_WRAP_MAX_EXTENSION_GROUPS = 4;
 const HARD_WRAP_INDENT_REGEX = /^[ \t]+/;
@@ -80,6 +82,7 @@ export function buildTerminalLinkWindow(
   buffer: TerminalBufferLike,
   bufferLineNumber: number,
   looksOpenAtEnd: (text: string) => boolean,
+  shouldJoinHardWrap?: TerminalHardWrapJoinPredicate,
 ): TerminalLinkWindow | null {
   if (!buffer.getLine(bufferLineNumber)) {
     return null;
@@ -119,6 +122,10 @@ export function buildTerminalLinkWindow(
     const previousStart = softWrapGroupStart(previousEnd);
     const previousText = groupText(previousStart, previousEnd);
     if (looksOpenAtEnd(previousText)) {
+      const rightText = groupText(previousEnd + 1, endLineIndex);
+      if (shouldJoinHardWrap && !shouldJoinHardWrap(previousText, rightText)) {
+        break;
+      }
       // 锚点行：链接从这里延续下来，把它（和之前记下的中段行）一并纳入窗口。
       // 窗口宁可偏大：解析按 file:// 分段，多纳入的行不会让相邻链接粘连。
       startLineIndex = previousStart;
@@ -167,11 +174,20 @@ export function buildTerminalLinkWindow(
     if (!looksOpenAtEnd(window.text)) {
       break;
     }
-    const nextLine = buffer.getLine(endLineIndex + 1);
-    if (!nextLine || nextLine.translateToString(true).trim().length === 0) {
+    const nextStart = endLineIndex + 1;
+    const nextLine = buffer.getLine(nextStart);
+    if (!nextLine) {
       break;
     }
-    endLineIndex = softWrapGroupEnd(endLineIndex + 1);
+    const nextEnd = softWrapGroupEnd(nextStart);
+    const nextText = groupText(nextStart, nextEnd);
+    if (nextText.trim().length === 0) {
+      break;
+    }
+    if (shouldJoinHardWrap && !shouldJoinHardWrap(window.text, nextText)) {
+      break;
+    }
+    endLineIndex = nextEnd;
     window = assemble();
   }
 

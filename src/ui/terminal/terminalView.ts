@@ -50,6 +50,11 @@ import {
   terminalFileUriLooksOpenAtEnd,
 } from '../../services/terminal/terminalFileLinks';
 import {
+  parseTerminalWebLinks,
+  terminalWebUrlLooksLikeContinuation,
+  terminalWebUrlLooksOpenAtEnd,
+} from '../../services/terminal/terminalWebLinks';
+import {
   buildTerminalLinkWindow,
   terminalBufferPositionForStringIndex,
 } from '../../services/terminal/terminalLinkGeometry';
@@ -87,6 +92,13 @@ const IDLE_SHELL_PROCESS_NAMES = new Set([
 
 interface TerminalCloseRisk {
   processName: string;
+}
+
+interface ParsedTerminalHyperlink {
+  uri: string;
+  startIndex: number;
+  endIndex: number;
+  kind: 'file' | 'web';
 }
 
 function isIdleShellForeground(info: ForegroundInfo): boolean {
@@ -129,7 +141,7 @@ export class TerminalView extends ItemView {
   private searchContainer: HTMLElement | null = null;
   private searchInput: HTMLInputElement | null = null;
   private resizeObserver: ResizeObserver | null = null;
-  private fileUriLinkProvider: XtermDisposable | null = null;
+  private terminalLinkProvider: XtermDisposable | null = null;
   /** 跨行链接悬停时手动铺设的下划线覆盖层元素 */
   private linkHoverDecorations: HTMLElement[] = [];
   private titleChangeCleanup: (() => void) | null = null;
@@ -336,8 +348,8 @@ export class TerminalView extends ItemView {
     this.resizeObserver?.disconnect();
     this.resizeObserver = null;
     this.clearLinkHoverDecorations();
-    this.fileUriLinkProvider?.dispose();
-    this.fileUriLinkProvider = null;
+    this.terminalLinkProvider?.dispose();
+    this.terminalLinkProvider = null;
     this.titleChangeCleanup?.();
     this.titleChangeCleanup = null;
     this.searchStateCleanup?.();
@@ -1169,8 +1181,8 @@ export class TerminalView extends ItemView {
       },
     };
 
-    this.fileUriLinkProvider?.dispose();
-    this.fileUriLinkProvider = xterm.registerLinkProvider({
+    this.terminalLinkProvider?.dispose();
+    this.terminalLinkProvider = xterm.registerLinkProvider({
       provideLinks: (bufferLineNumber, callback) => {
         const zeroBasedLineNumber = bufferLineNumber - 1;
         if (zeroBasedLineNumber < 0) {
@@ -1184,7 +1196,18 @@ export class TerminalView extends ItemView {
           return;
         }
 
-        const links = parseTerminalFileUriLinks(window.text)
+        const parsedLinks: ParsedTerminalHyperlink[] = [
+          ...parseTerminalFileUriLinks(window.text).map((link): ParsedTerminalHyperlink => ({
+            ...link,
+            kind: 'file',
+          })),
+          ...parseTerminalWebLinks(window.text).map((link): ParsedTerminalHyperlink => ({
+            ...link,
+            kind: 'web',
+          })),
+        ];
+
+        const links = parsedLinks
           .flatMap((link): XtermLink[] => {
             // 链接内部的硬换行拼接点，点击时做空格/截断变体回退。
             const junctions = window.hardJunctions
@@ -1220,7 +1243,11 @@ export class TerminalView extends ItemView {
               range,
               activate: (event, text) => {
                 event.preventDefault();
-                void this.openTerminalFileUriLink(text, relativeJunctions);
+                if (link.kind === 'file') {
+                  void this.openTerminalFileUriLink(text, relativeJunctions);
+                } else {
+                  void this.openTerminalHyperlinkTarget(text);
+                }
               },
               // xterm 悬停只高亮指针下的片段；多片段时给其余片段叠加下划线
               // 覆盖层，让整条链接跨行同亮。
@@ -1251,7 +1278,14 @@ export class TerminalView extends ItemView {
     return buildTerminalLinkWindow(
       xterm.buffer.active,
       bufferLineNumber,
-      terminalFileUriLooksOpenAtEnd,
+      (text) => terminalFileUriLooksOpenAtEnd(text) || terminalWebUrlLooksOpenAtEnd(text),
+      (leftText, rightText) => {
+        if (terminalFileUriLooksOpenAtEnd(leftText)) {
+          return true;
+        }
+        return terminalWebUrlLooksOpenAtEnd(leftText)
+          && terminalWebUrlLooksLikeContinuation(rightText);
+      },
     );
   }
 
@@ -1504,7 +1538,7 @@ export class TerminalView extends ItemView {
       active: true,
       eState: line ? { line: line - 1, col: 0 } : undefined,
     });
-    this.app.workspace.revealLeaf(leaf);
+    await this.app.workspace.revealLeaf(leaf);
   }
 
   private updateAppearanceStyles(): void {

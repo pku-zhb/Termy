@@ -245,7 +245,7 @@ export class TerminalSettingsRenderer extends BaseSettingsRenderer {
       if (capturing) return;
       capturing = true;
       const previous = btn.textContent;
-      btn.setText('按下按键…(Esc 取消)');
+      btn.setText('按下按键…(esc 取消)');
       btn.addClass('is-capturing');
       const cleanup = (): void => {
         capturing = false;
@@ -362,12 +362,13 @@ export class TerminalSettingsRenderer extends BaseSettingsRenderer {
   /** 从设置读出规则条目；JSON 坏掉时回退默认，保证设置页始终能渲染。 */
   private readKeybindingEntries(): KeybindingConfigEntry[] {
     try {
-      const parsed = JSON.parse(this.context.plugin.settings.keybindings || DEFAULT_KEYBINDING_CONFIG_JSON);
+      const parsed: unknown = JSON.parse(this.context.plugin.settings.keybindings || DEFAULT_KEYBINDING_CONFIG_JSON);
       if (Array.isArray(parsed)) return parsed as KeybindingConfigEntry[];
     } catch {
       /* 回退默认 */
     }
-    return JSON.parse(DEFAULT_KEYBINDING_CONFIG_JSON) as KeybindingConfigEntry[];
+    const fallback: unknown = JSON.parse(DEFAULT_KEYBINDING_CONFIG_JSON);
+    return Array.isArray(fallback) ? fallback as KeybindingConfigEntry[] : [];
   }
 
   /**
@@ -380,7 +381,7 @@ export class TerminalSettingsRenderer extends BaseSettingsRenderer {
     const card = containerEl.createDiv({ cls: 'settings-card' });
     new Setting(card).setName(t('settingsDetails.terminal.backendSettings')).setHeading();
 
-    const INSTALL_CMD = 'brew install pku-zhb/termy/termy-server';
+    const INSTALL_CMD = 'brew install pku-zhb/tap/termy-server';
 
     const statusSetting = new Setting(card).setName(t('settingsDetails.terminal.backendStatus'));
     const renderStatus = (): void => {

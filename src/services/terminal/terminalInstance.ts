@@ -78,7 +78,6 @@ let xtermModules: {
   SearchAddon: typeof import('@xterm/addon-search').SearchAddon;
   CanvasAddon: typeof import('@xterm/addon-canvas').CanvasAddon;
   WebglAddon: typeof import('@xterm/addon-webgl').WebglAddon;
-  WebLinksAddon: typeof import('@xterm/addon-web-links').WebLinksAddon;
 } | null = null;
 
 /**
@@ -100,23 +99,21 @@ async function loadXtermModules() {
       { FitAddon },
       { SearchAddon },
       { CanvasAddon },
-      { WebglAddon },
-      { WebLinksAddon }
+      { WebglAddon }
     ] = await Promise.all([
       import('@xterm/xterm'),
       import('@xterm/addon-fit'),
       import('@xterm/addon-search'),
       import('@xterm/addon-canvas'),
-      import('@xterm/addon-webgl'),
-      import('@xterm/addon-web-links')
+      import('@xterm/addon-webgl')
     ]);
     
     // Verify that all modules were loaded successfully
-    if (!Terminal || !FitAddon || !SearchAddon || !CanvasAddon || !WebglAddon || !WebLinksAddon) {
+    if (!Terminal || !FitAddon || !SearchAddon || !CanvasAddon || !WebglAddon) {
       throw new Error('One or more xterm.js modules failed to load');
     }
     
-    xtermModules = { Terminal, FitAddon, SearchAddon, CanvasAddon, WebglAddon, WebLinksAddon };
+    xtermModules = { Terminal, FitAddon, SearchAddon, CanvasAddon, WebglAddon };
     debugLog('[Terminal] xterm.js 模块加载完成');
     
     return xtermModules;
@@ -286,7 +283,7 @@ export class TerminalInstance {
    */
   private async initXterm(): Promise<void> {
     try {
-      const { Terminal, FitAddon, SearchAddon, WebLinksAddon } = await loadXtermModules();
+      const { Terminal, FitAddon, SearchAddon } = await loadXtermModules();
       
       this.xterm = new Terminal({
         cursorBlink: this.options.cursorBlink ?? true,
@@ -310,17 +307,6 @@ export class TerminalInstance {
       this.xterm.loadAddon(this.fitAddon);
       this.xterm.loadAddon(this.searchAddon);
       
-      // Ctrl+click opens links
-      const webLinksAddon = new WebLinksAddon((event, uri) => {
-        // Only open links on Ctrl+click (Windows/Linux) or Cmd+click (macOS)
-        if (event.ctrlKey || event.metaKey) {
-          event.preventDefault();
-          void shell.openExternal(uri).catch((error) => {
-            errorLog('[Terminal] Failed to open external link:', error);
-          });
-        }
-      });
-      this.xterm.loadAddon(webLinksAddon);
       this.setupClaudeCodeTuiHandlers();
       
       debugLog('[Terminal] xterm.js 实例初始化完成');
@@ -684,6 +670,15 @@ export class TerminalInstance {
     this.exitUnsubscribe = null;
     this.errorUnsubscribe = null;
     this.shellEventUnsubscribe = null;
+    this.foregroundUnsubscribe = null;
+  }
+
+  private hasPtyClientHandlers(): boolean {
+    return this.outputUnsubscribe !== null
+      || this.exitUnsubscribe !== null
+      || this.errorUnsubscribe !== null
+      || this.shellEventUnsubscribe !== null
+      || this.foregroundUnsubscribe !== null;
   }
 
   private setupXtermHandlers(): void {
@@ -1010,26 +1005,55 @@ export class TerminalInstance {
     this.xterm.write('\x1b[32m[连接已恢复，正在恢复终端会话...]\x1b[0m\r\n');
 
     try {
-      this.disposePtyClientHandlers();
-      this.sessionId = null;
       this.clearPendingInput();
 
-      const reconnectCwd = this.currentCwd ?? this.options.cwd;
-      try {
-        await this.initializePtySession(serverManager, reconnectCwd);
-      } catch (error) {
-        if (!this.currentCwd || this.currentCwd === this.options.cwd) {
-          throw error;
+      let attachedExistingSession = false;
+      const existingSessionId = this.sessionId;
+      if (existingSessionId) {
+        try {
+          const ptyClient = serverManager.pty();
+          attachedExistingSession = await ptyClient.attach(existingSessionId);
+          if (attachedExistingSession) {
+            if (this.ptyClient !== ptyClient || !this.hasPtyClientHandlers()) {
+              this.disposePtyClientHandlers();
+              this.ptyClient = ptyClient;
+              this.sessionId = existingSessionId;
+              this.setupPtyClientHandlers();
+            } else {
+              this.ptyClient = ptyClient;
+              this.sessionId = existingSessionId;
+            }
+          }
+        } catch (error) {
+          debugWarn('[Terminal] 重新绑定现有 PTY 会话失败，将尝试创建新会话:', error);
         }
+      }
 
-        debugWarn('[Terminal] 使用当前目录恢复会话失败，回退到初始目录:', error);
-        await this.initializePtySession(serverManager, this.options.cwd);
+      if (!attachedExistingSession) {
+        this.disposePtyClientHandlers();
+        this.sessionId = null;
+
+        const reconnectCwd = this.currentCwd ?? this.options.cwd;
+        try {
+          await this.initializePtySession(serverManager, reconnectCwd);
+        } catch (error) {
+          if (!this.currentCwd || this.currentCwd === this.options.cwd) {
+            throw error;
+          }
+
+          debugWarn('[Terminal] 使用当前目录恢复会话失败，回退到初始目录:', error);
+          await this.initializePtySession(serverManager, this.options.cwd);
+        }
       }
       if (this.isDestroyed) return;
 
       this.sessionRecoveryNeeded = false;
       this.webSocketDisconnected = false;
-      this.xterm.write('\x1b[32m[终端会话已恢复]\x1b[0m\r\n');
+      this.xterm.write(
+        attachedExistingSession
+          ? '\x1b[32m[终端会话已重新连接]\x1b[0m\r\n'
+          : '\x1b[32m[终端会话已重新创建]\x1b[0m\r\n'
+      );
       this.fit();
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);

@@ -181,19 +181,35 @@ export class ServerManager {
 
    */
   async ensureServer(): Promise<void> {
-    // If the server is already running, return immediately
     if (this.port !== null && this.ws?.readyState === WebSocket.OPEN) {
       return;
     }
 
-    // If startup is already in progress, wait for it to finish
     if (this.serverStartPromise) {
-      return this.serverStartPromise;
+      await this.serverStartPromise;
+      if (this.ws?.readyState === WebSocket.OPEN) {
+        return;
+      }
+      if (this.port !== null && this.process !== null) {
+        await this.connectWebSocket();
+      }
+      return;
     }
 
-    // Start the server
-    this.serverStartPromise = this.startServer();
-    return this.serverStartPromise;
+    if (this.port !== null && this.process !== null) {
+      await this.connectWebSocket();
+      return;
+    }
+
+    const startPromise = this.startServer();
+    this.serverStartPromise = startPromise;
+    try {
+      await startPromise;
+    } finally {
+      if (this.serverStartPromise === startPromise) {
+        this.serverStartPromise = null;
+      }
+    }
   }
 
   /**
@@ -349,7 +365,7 @@ export class ServerManager {
       // 未安装后端时给出明确的安装指引（尤其多机/新机器场景），而非晦涩的 ENOENT。
       if (!this.fs.existsSync(binaryPath)) {
         throw new Error(
-          '未找到 termy-server 后端。请安装：brew install pku-zhb/termy/termy-server'
+          '未找到 termy-server 后端。请安装：brew install pku-zhb/tap/termy-server'
           + '（或 cargo install --path rust-servers）。',
         );
       }
@@ -358,7 +374,7 @@ export class ServerManager {
       await this.ensureExecutable(binaryPath);
       
       // Start the process
-      this.process = this.spawn(binaryPath, ['--port', '0'], {
+      this.process = this.spawn(binaryPath, ['--port', '0', '--parent-pid', String(process.pid)], {
         stdio: ['pipe', 'pipe', 'pipe'],
         env: {
           ...process.env,
@@ -494,6 +510,10 @@ export class ServerManager {
    * Establish the WebSocket connection
    */
   private async connectWebSocket(): Promise<void> {
+    if (this.ws?.readyState === WebSocket.OPEN) {
+      return;
+    }
+
     if (this.wsConnectPromise) {
       return this.wsConnectPromise;
     }
@@ -513,19 +533,71 @@ export class ServerManager {
       
       this.ws = new WebSocket(wsUrl);
       const ws = this.ws;
-      
-      const timeout = window.setTimeout(() => {
+      let settled = false;
+      let timeout: number | null = null;
+
+      const clearConnectTimeout = () => {
+        if (timeout !== null) {
+          window.clearTimeout(timeout);
+          timeout = null;
+        }
+      };
+
+      const resolveOnce = () => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearConnectTimeout();
         if (this.ws === ws) {
           this.wsConnectPromise = null;
         }
-        reject(new ServerManagerError(
+        resolve();
+      };
+
+      const rejectOnce = (error: Error) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearConnectTimeout();
+        if (this.ws === ws) {
+          this.wsConnectPromise = null;
+        }
+        reject(error);
+      };
+      
+      timeout = window.setTimeout(() => {
+        if (this.ws === ws) {
+          this.ws = null;
+          this.wsConnectPromise = null;
+          this._ptyClient?.setWebSocket(null);
+        }
+        try {
+          ws.close();
+        } catch {
+          // Ignore close failures from a timed-out socket.
+        }
+        rejectOnce(new ServerManagerError(
           ServerErrorCode.CONNECTION_FAILED,
           'WebSocket 连接超时'
         ));
       }, 5000);
 
       ws.onopen = () => {
-        window.clearTimeout(timeout);
+        if (this.ws !== ws) {
+          try {
+            ws.close(1000, 'Superseded');
+          } catch {
+            // Ignore close failures from a superseded socket.
+          }
+          rejectOnce(new ServerManagerError(
+            ServerErrorCode.CONNECTION_FAILED,
+            'WebSocket 连接已被新的连接取代'
+          ));
+          return;
+        }
+
         debugLog('[ServerManager] WebSocket 已连接');
         
         // Reset the reconnect counter
@@ -536,18 +608,28 @@ export class ServerManager {
         this.updateClientsWebSocket();
         
         this.emit('ws-connected');
-        resolve();
+        resolveOnce();
       };
 
       ws.onclose = (event) => {
         debugLog('[ServerManager] WebSocket 已断开, code:', event.code, 'reason:', event.reason);
-        if (this.ws === ws) {
+        const wasCurrentSocket = this.ws === ws;
+        if (wasCurrentSocket) {
           this.ws = null;
           this.wsConnectPromise = null;
+          this._ptyClient?.setWebSocket(null);
         }
-        
-        // Clear the WebSocket on module clients
-        this._ptyClient?.setWebSocket(null);
+
+        if (!settled) {
+          rejectOnce(new ServerManagerError(
+            ServerErrorCode.CONNECTION_FAILED,
+            `WebSocket 连接关闭: ${event.code || 'unknown'}`
+          ));
+        }
+
+        if (!wasCurrentSocket) {
+          return;
+        }
 
         if (this.isDevInstallInProgress()) {
           debugLog('[ServerManager] 开发安装进行中，跳过 WebSocket 重连通知');
@@ -563,7 +645,6 @@ export class ServerManager {
       };
 
       ws.onerror = (event) => {
-        window.clearTimeout(timeout);
         errorLog('[ServerManager] WebSocket 错误:', event);
         // Do not reject here; let onclose handle it
       };
@@ -674,7 +755,7 @@ export class ServerManager {
    * Perform WebSocket reconnect
    */
   private async attemptReconnect(): Promise<void> {
-    if (this.isShuttingDown || !this.port) {
+    if (this.isShuttingDown) {
       this.isReconnecting = false;
       return;
     }
@@ -682,7 +763,11 @@ export class ServerManager {
     debugLog('[ServerManager] 尝试重连 WebSocket...');
     
     try {
-      await this.connectWebSocket();
+      if (this.port !== null && this.process !== null) {
+        await this.connectWebSocket();
+      } else {
+        await this.ensureServer();
+      }
       
       debugLog('[ServerManager] WebSocket 重连成功');
       new Notice(
@@ -915,8 +1000,10 @@ export class ServerManager {
     
     // Close the existing connection
     if (this.ws) {
-      this.ws.close(1000, 'Manual reconnect');
+      const existingWs = this.ws;
       this.ws = null;
+      this._ptyClient?.setWebSocket(null);
+      existingWs.close(1000, 'Manual reconnect');
     }
     
     // If the server is still running, reconnect the WebSocket directly
