@@ -128,9 +128,8 @@ export default class TerminalPlugin extends Plugin {
 
     // Delay UI initialization until the layout is ready whenever possible
     this.app.workspace.onLayoutReady(() => {
-      if (this.settings.visibility.showInNewTab) {
-        this.registerNewTabTerminalAction();
-      }
+      this.registerNewTabTerminalAction();
+      this.registerTerminalAutoFocus();
     });
 
     // Add the settings tab
@@ -345,6 +344,7 @@ export default class TerminalPlugin extends Plugin {
       if (existing.length > 0) {
         void workspace.revealLeaf(existing[0]);
         workspace.setActiveLeaf(existing[0], { focus: true });
+        this.focusTerminalLeaf(existing[0]);
         return;
       }
     }
@@ -355,6 +355,7 @@ export default class TerminalPlugin extends Plugin {
       active: true,
     });
     workspace.setActiveLeaf(leaf, { focus: true });
+    this.focusTerminalLeaf(leaf);
   }
 
 
@@ -709,18 +710,25 @@ export default class TerminalPlugin extends Plugin {
       })
     );
 
-    // 切回 Termy 标签时自动把焦点送进当前终端，避免焦点卡在标签头按钮（后退/前进/更多）上
+    // Initial injection
+    this.injectTerminalButtonToEmptyViews();
+  }
+
+  private registerTerminalAutoFocus(): void {
     this.registerEvent(
       this.app.workspace.on('active-leaf-change', (leaf) => {
-        const view = leaf?.view;
-        if (view instanceof TerminalView) {
-          window.setTimeout(() => view.focusActiveTerminal(), 0);
+        if (leaf) {
+          this.focusTerminalLeaf(leaf);
         }
       })
     );
+  }
 
-    // Initial injection
-    this.injectTerminalButtonToEmptyViews();
+  private focusTerminalLeaf(leaf: WorkspaceLeaf): void {
+    const view = leaf.view;
+    if (view instanceof TerminalView) {
+      view.focusActiveTerminalSoon();
+    }
   }
 
   /**

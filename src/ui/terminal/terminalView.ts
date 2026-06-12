@@ -70,6 +70,7 @@ type XtermLink = import('@xterm/xterm').ILink;
 type XtermBufferRange = import('@xterm/xterm').IBufferRange;
 
 export const TERMINAL_VIEW_TYPE = 'terminal-view';
+const TERMINAL_FOCUS_RETRY_DELAYS_MS = [0, 50, 150] as const;
 const IDLE_SHELL_PROCESS_NAMES = new Set([
   'bash',
   'cmd',
@@ -149,6 +150,7 @@ export class TerminalView extends ItemView {
   private initPromise: Promise<TerminalInstance> | null = null;
   private initResolve: ((terminal: TerminalInstance) => void) | null = null;
   private initReject: ((error: Error) => void) | null = null;
+  private pendingFocusTimeouts: number[] = [];
 
   private readonly fs: FsModule;
   private readonly path: PathModule;
@@ -344,6 +346,7 @@ export class TerminalView extends ItemView {
   }
 
   async onClose(): Promise<void> {
+    this.clearPendingFocusTimeouts();
     this.leaf.detach = this.detachLeafWithoutConfirmation;
     this.resizeObserver?.disconnect();
     this.resizeObserver = null;
@@ -681,8 +684,52 @@ export class TerminalView extends ItemView {
   gotoTab(n: number): void { if (n >= 0 && n < this.tabs.length) this.setActiveTab(n); }
   getTabCount(): number { return this.tabs.length; }
 
+  focusActiveTerminalSoon(): void {
+    this.clearPendingFocusTimeouts();
+    for (const delay of TERMINAL_FOCUS_RETRY_DELAYS_MS) {
+      const timeout = window.setTimeout(() => {
+        this.pendingFocusTimeouts = this.pendingFocusTimeouts.filter((item) => item !== timeout);
+        if (this.app.workspace.getActiveViewOfType(TerminalView) === this) {
+          this.focusActiveTerminal();
+        }
+      }, delay);
+      this.pendingFocusTimeouts.push(timeout);
+    }
+  }
+
+  private clearPendingFocusTimeouts(): void {
+    for (const timeout of this.pendingFocusTimeouts.splice(0)) {
+      window.clearTimeout(timeout);
+    }
+  }
+
+  private shouldPreserveCurrentFocus(): boolean {
+    const activeElement = this.contentEl.ownerDocument.activeElement;
+    const ownerWindow = this.contentEl.ownerDocument.defaultView;
+    if (!ownerWindow || !(activeElement instanceof ownerWindow.HTMLElement)) {
+      return false;
+    }
+    if (activeElement.closest('.modal-container, .modal, .menu')) {
+      return true;
+    }
+    if (!this.contentEl.contains(activeElement)) {
+      return false;
+    }
+    if (activeElement.classList.contains('xterm-helper-textarea')) {
+      return false;
+    }
+    return activeElement.matches('input, textarea, select, button, [contenteditable="true"], [tabindex]');
+  }
+
   /** 聚焦当前 active 终端（供切回 Obsidian 标签时自动 focus，避免焦点卡在标签头按钮上） */
   focusActiveTerminal(): void {
+    if (this.shouldPreserveCurrentFocus()) {
+      return;
+    }
+    if (this.searchContainer?.classList.contains('is-visible')) {
+      this.searchInput?.focus();
+      return;
+    }
     const terminal = this.tabs[this.activeIndex]?.terminal;
     if (terminal?.isAlive()) {
       terminal.fit();
