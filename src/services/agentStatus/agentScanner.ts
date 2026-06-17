@@ -5,6 +5,7 @@ import {
   type AgentSnapshot,
   type AgentState,
   type AgentSummary,
+  type AgentTmuxClient,
 } from './types.ts';
 import type { AgentStatusRuntime } from './runtime.ts';
 
@@ -22,6 +23,12 @@ interface TmuxPaneInfo {
   sessionName: string;
   panePid: number;
   paneTty: string;
+}
+
+interface TmuxClientInfo {
+  clientPid: number;
+  clientTty: string;
+  sessionName: string;
 }
 
 interface CodexThreadInfo {
@@ -60,6 +67,13 @@ const CLAUDE_BUSY_FRESHNESS_MS = 5 * 60 * 1000;
 const CODEX_TURN_ACTIVITY_FRESHNESS_MS = 90 * 1000;
 const CODEX_THREAD_LOOKUP_WINDOW_SECONDS = 24 * 60 * 60;
 const SQLITE_QUERY_TIMEOUT_MS = 1000;
+const TMUX_FIELD_SEPARATOR = '|';
+const TMUX_BINARY_CANDIDATES = [
+  '/opt/homebrew/bin/tmux',
+  '/usr/local/bin/tmux',
+  '/usr/bin/tmux',
+  '/bin/tmux',
+];
 
 export class AgentScanner {
   private readonly runtime: AgentStatusRuntime;
@@ -80,7 +94,10 @@ export class AgentScanner {
     const processes = await this.loadProcesses();
     const processByPid = new Map(processes.map((process) => [process.pid, process]));
     const claudeSessions = await this.loadClaudeSessions();
-    const tmuxPaneByTty = await this.loadTmuxPanes();
+    const [tmuxPaneByTty, tmuxClients] = await Promise.all([
+      this.loadTmuxPanes(),
+      this.loadTmuxClients(),
+    ]);
 
     const codexClients = await Promise.all(
       this.codexProcesses(processes, processByPid)
@@ -101,17 +118,29 @@ export class AgentScanner {
       return a.pid - b.pid;
     });
 
-    return this.makeSnapshot(clients);
+    return this.makeSnapshot(clients, tmuxClients);
   }
 
-  private makeSnapshot(clients: AgentClient[]): AgentSnapshot {
+  private makeSnapshot(clients: AgentClient[], tmuxClients: TmuxClientInfo[] = []): AgentSnapshot {
     return {
       generatedAtMs: this.now(),
       agentPids: [...clients.map((client) => client.pid)].sort((a, b) => a - b),
       clients,
+      tmuxClients: this.makeTmuxClients(tmuxClients),
       summary: this.makeSummary(clients),
       credits: EMPTY_AGENT_CREDIT_SNAPSHOT,
     };
+  }
+
+  private makeTmuxClients(tmuxClients: TmuxClientInfo[]): AgentTmuxClient[] {
+    return tmuxClients
+      .filter((client) => Number.isFinite(client.clientPid) && client.sessionName)
+      .map((client) => ({
+        pid: client.clientPid,
+        tty: client.clientTty || null,
+        sessionName: client.sessionName,
+        surfaceId: `tmux:${client.sessionName}`,
+      }));
   }
 
   private async loadProcesses(): Promise<ProcInfo[]> {
@@ -379,9 +408,10 @@ export class AgentScanner {
   }
 
   private async loadTmuxPanes(): Promise<Map<string, TmuxPaneInfo>> {
+    const command = tmuxShellCommand(`list-panes -a -F "#{session_name}${TMUX_FIELD_SEPARATOR}#{pane_pid}${TMUX_FIELD_SEPARATOR}#{pane_tty}"`);
     const result = await this.runtime.runCommand('/bin/sh', [
       '-lc',
-      'command -v tmux >/dev/null 2>&1 && tmux list-panes -a -F "#{session_name}\\t#{pane_pid}\\t#{pane_tty}" 2>/dev/null || true',
+      command,
     ], { timeoutMs: 1000 });
     const panes = new Map<string, TmuxPaneInfo>();
     if (!result || result.exitCode !== 0) {
@@ -389,7 +419,7 @@ export class AgentScanner {
     }
 
     for (const line of result.stdout.split('\n')) {
-      const [sessionName, panePid, paneTty] = line.split('\t');
+      const [sessionName, panePid, paneTty] = splitTmuxFields(line);
       if (!sessionName || !paneTty) {
         continue;
       }
@@ -401,6 +431,36 @@ export class AgentScanner {
     }
 
     return panes;
+  }
+
+  private async loadTmuxClients(): Promise<TmuxClientInfo[]> {
+    const command = tmuxShellCommand(`list-clients -F "#{client_pid}${TMUX_FIELD_SEPARATOR}#{client_tty}${TMUX_FIELD_SEPARATOR}#{session_name}"`);
+    const result = await this.runtime.runCommand('/bin/sh', [
+      '-lc',
+      command,
+    ], { timeoutMs: 1000 });
+    if (!result || result.exitCode !== 0) {
+      return [];
+    }
+
+    const clients = result.stdout
+      .split('\n')
+      .map((line) => {
+        const [clientPid, clientTty, sessionName] = splitTmuxFields(line);
+        if (!clientPid || !sessionName) {
+          return null;
+        }
+        return {
+          clientPid: Number(clientPid),
+          clientTty: clientTty || '',
+          sessionName,
+        };
+      })
+      .filter((client): client is TmuxClientInfo =>
+        client !== null
+        && Number.isFinite(client.clientPid)
+        && client.sessionName.length > 0);
+    return clients;
   }
 
   private tmuxPaneForProcess(
@@ -424,7 +484,15 @@ export class AgentScanner {
       || process.args === 'caffeinate'
       || process.args.startsWith('caffeinate ')
       || process.args === '/usr/bin/caffeinate'
-      || process.args.startsWith('/usr/bin/caffeinate ');
+      || process.args.startsWith('/usr/bin/caffeinate ')
+      || this.isCodexCompanionChild(process);
+  }
+
+  private isCodexCompanionChild(process: ProcInfo): boolean {
+    return process.args.includes('/Codex.app/Contents/Resources/node_repl')
+      || process.args.includes('/Codex.app/Contents/Resources/codex app-server')
+      || process.args.includes('/codex app-server --listen stdio://')
+      || process.args.endsWith('/Resources/node_repl');
   }
 
   private isDescendant(pid: number, roots: Set<number>, processByPid: Map<number, ProcInfo>): boolean {
@@ -733,6 +801,45 @@ function nilIfEmpty(value: string | undefined): string | null {
 
 function normalizeTty(tty: string): string {
   return tty.replace(/^\/dev\//, '');
+}
+
+function splitTmuxFields(line: string): string[] {
+  if (line.includes(TMUX_FIELD_SEPARATOR)) {
+    return line.split(TMUX_FIELD_SEPARATOR);
+  }
+  if (line.includes('\t')) {
+    return line.split('\t');
+  }
+  if (line.includes('\\t')) {
+    return line.split('\\t');
+  }
+  return line.split('_');
+}
+
+function tmuxShellCommand(command: string): string {
+  const candidates = [
+    '"$(command -v tmux 2>/dev/null)"',
+    ...TMUX_BINARY_CANDIDATES.map((candidate) => shellQuote(candidate)),
+  ].join(' ');
+
+  return [
+    'tmux_uid="$(id -u 2>/dev/null || echo 0)"',
+    `for tmux_bin in ${candidates}; do`,
+    '[ -x "$tmux_bin" ] || continue',
+    `tmux_output="$("$tmux_bin" ${command} 2>/dev/null)"`,
+    'if [ -n "$tmux_output" ]; then printf "%s\\n" "$tmux_output"; exit 0; fi',
+    'for tmux_socket in "/private/tmp/tmux-${tmux_uid}/default" "/tmp/tmux-${tmux_uid}/default"; do',
+    '[ -S "$tmux_socket" ] || continue',
+    `tmux_output="$("$tmux_bin" -S "$tmux_socket" ${command} 2>/dev/null)"`,
+    'if [ -n "$tmux_output" ]; then printf "%s\\n" "$tmux_output"; exit 0; fi',
+    'done',
+    'done',
+    'true',
+  ].join('\n');
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, "'\\''")}'`;
 }
 
 function sqlEscape(value: string): string {

@@ -19,6 +19,13 @@ export interface AgentClient {
   waitingSinceMs: number | null;
 }
 
+export interface AgentTmuxClient {
+  pid: number;
+  tty: string | null;
+  sessionName: string;
+  surfaceId: string;
+}
+
 export interface AgentSummary {
   total: number;
   claude: number;
@@ -34,6 +41,7 @@ export interface AgentSnapshot {
   generatedAtMs: number;
   agentPids: number[];
   clients: AgentClient[];
+  tmuxClients: AgentTmuxClient[];
   summary: AgentSummary;
   credits: AgentCreditSnapshot;
 }
@@ -74,6 +82,7 @@ export const EMPTY_AGENT_SNAPSHOT: AgentSnapshot = {
   generatedAtMs: 0,
   agentPids: [],
   clients: [],
+  tmuxClients: [],
   summary: EMPTY_AGENT_SUMMARY,
   credits: EMPTY_AGENT_CREDIT_SNAPSHOT,
 };

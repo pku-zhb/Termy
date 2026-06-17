@@ -2278,10 +2278,10 @@
 .termy-agent-monitor {
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: 8px;
   flex: 0 0 auto;
-  min-height: 34px;
-  padding: 4px 8px;
+  min-height: 40px;
+  padding: 5px 9px;
   background-color: color-mix(in srgb, var(--background-primary) 86%, var(--background-secondary));
   border-bottom: 1px solid var(--background-modifier-border);
   color: var(--text-muted);
@@ -2295,8 +2295,8 @@
 
 .termy-agent-monitor-activity {
   flex: 0 0 auto;
-  width: 8px;
-  height: 8px;
+  width: 9px;
+  height: 9px;
   border-radius: 999px;
   background-color: var(--text-faint);
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--text-faint) 16%, transparent);
@@ -2315,7 +2315,7 @@
 .termy-agent-monitor-summary {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 7px;
   flex: 1 1 auto;
   min-width: 0;
   overflow-x: auto;
@@ -2330,8 +2330,8 @@
   align-items: center;
   gap: 5px;
   flex: 0 0 auto;
-  height: 24px;
-  padding: 0 7px;
+  height: 28px;
+  padding: 0 8px;
   border: 1px solid var(--background-modifier-border);
   border-radius: var(--radius-s);
   background-color: var(--background-primary);
@@ -2341,8 +2341,8 @@
 }
 
 .termy-agent-pill-icon {
-  width: 14px;
-  height: 14px;
+  width: 16px;
+  height: 16px;
   border-radius: 4px;
 }
 
@@ -2351,8 +2351,8 @@
 }
 
 .termy-agent-pill-dot {
-  width: 7px;
-  height: 7px;
+  width: 8px;
+  height: 8px;
   border-radius: 999px;
   background-color: var(--text-faint);
 }
@@ -2376,6 +2376,7 @@
 
 .termy-agent-pill-count {
   color: var(--text-normal);
+  font-size: var(--font-ui-small);
   font-weight: var(--font-semibold);
   font-variant-numeric: tabular-nums;
 }
@@ -2383,25 +2384,37 @@
 .termy-agent-credit-meters {
   display: inline-flex;
   align-items: flex-end;
-  gap: 2px;
+  gap: 3px;
   flex: 0 0 auto;
-  height: 15px;
-  margin-left: 1px;
+  height: 19px;
+  margin-left: 2px;
 }
 
 .termy-agent-credit-meter {
   position: relative;
   display: inline-block;
-  width: 5px;
-  height: 15px;
+  width: 7px;
+  height: 19px;
   overflow: hidden;
   border-radius: 1px;
-  background-color: color-mix(in srgb, var(--text-muted) 18%, transparent);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text-muted) 12%, transparent);
+  --termy-agent-meter-color: color-mix(in srgb, var(--interactive-accent) 82%, var(--text-normal));
+  --termy-agent-meter-glow: color-mix(in srgb, var(--interactive-accent) 32%, transparent);
+  background-color: color-mix(in srgb, var(--interactive-accent) 10%, var(--background-modifier-border));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--interactive-accent) 18%, transparent);
+}
+
+.termy-agent-credit-meter.is-usage {
+  --termy-agent-meter-color: color-mix(in srgb, var(--interactive-accent) 84%, var(--text-normal));
+  --termy-agent-meter-glow: color-mix(in srgb, var(--interactive-accent) 34%, transparent);
+}
+
+.termy-agent-credit-meter.is-reset {
+  --termy-agent-meter-color: color-mix(in srgb, var(--text-accent, var(--interactive-accent)) 62%, var(--text-muted));
+  --termy-agent-meter-glow: color-mix(in srgb, var(--text-accent, var(--interactive-accent)) 24%, transparent);
 }
 
 .termy-agent-credit-meter.is-weekly-start {
-  margin-left: 5px;
+  margin-left: 7px;
 }
 
 .termy-agent-credit-meter::after {
@@ -2410,8 +2423,8 @@
   bottom: 0;
   left: 0;
   height: var(--termy-agent-meter-fill, 0%);
-  background-color: color-mix(in srgb, var(--text-normal) 92%, transparent);
-  box-shadow: 0 0 5px color-mix(in srgb, var(--text-normal) 28%, transparent);
+  background-color: var(--termy-agent-meter-color);
+  box-shadow: 0 0 5px var(--termy-agent-meter-glow);
   content: '';
 }
 
@@ -2584,6 +2597,22 @@
   border-color: var(--interactive-accent);
   box-shadow: 0 0 0 1px var(--interactive-accent);
 }
+.termy-tab.has-agent-state {
+  color: var(--text-normal);
+}
+.termy-tab.has-agent-state.is-agent-running {
+  border-color: color-mix(in srgb, var(--color-green) 72%, var(--background-modifier-border));
+  background-color: color-mix(in srgb, var(--color-green) 14%, var(--background-primary));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-green) 24%, transparent);
+}
+.termy-tab.has-agent-state.is-agent-waiting-approval {
+  border-color: color-mix(in srgb, var(--color-red) 76%, var(--background-modifier-border));
+  background-color: color-mix(in srgb, var(--color-red) 13%, var(--background-primary));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-red) 26%, transparent);
+}
+.termy-tab.has-agent-state:hover {
+  filter: brightness(1.03);
+}
 
 /* 序号徽标，对应 Opt+数字切换键 */
 .termy-tab-index {
@@ -2611,8 +2640,9 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  gap: 2px;
   flex: 0 0 auto;
-  width: 17px;
+  min-width: 17px;
   height: 17px;
 }
 
@@ -2631,40 +2661,6 @@
 img.termy-tab-status-icon {
   object-fit: contain;
   border-radius: 2px;
-}
-
-.termy-tab-agent-light {
-  position: absolute;
-  right: -3px;
-  bottom: -3px;
-  width: 9px;
-  height: 9px;
-  border: 1.5px solid rgba(255, 255, 255, 0.82);
-  border-radius: 999px;
-  background-color: rgba(0, 0, 0, 0.38);
-  box-shadow: 0 0 5px rgba(255, 255, 255, 0.48);
-}
-
-.termy-tab-agent-light.is-running {
-  border-color: var(--color-green);
-  box-shadow: 0 0 7px color-mix(in srgb, var(--color-green) 78%, transparent);
-}
-
-.termy-tab-agent-light.is-waiting-approval {
-  border-color: var(--color-red);
-  box-shadow: 0 0 8px color-mix(in srgb, var(--color-red) 82%, transparent);
-}
-
-.termy-tab-agent-light.is-unknown {
-  border-color: color-mix(in srgb, var(--color-red) 70%, white);
-  opacity: 0.72;
-  box-shadow: 0 0 5px color-mix(in srgb, var(--color-red) 42%, transparent);
-}
-
-.termy-tab-agent-light.is-idle,
-.termy-tab-agent-light.is-stale {
-  border-color: rgba(255, 255, 255, 0.86);
-  box-shadow: 0 0 6px rgba(255, 255, 255, 0.48);
 }
 .termy-tab-label {
   overflow: hidden;

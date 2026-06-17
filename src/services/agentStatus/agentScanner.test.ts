@@ -10,12 +10,23 @@ class FakeRuntime implements AgentStatusRuntime {
   files = new Map<string, string>();
   dirs = new Map<string, string[]>();
   commandResults = new Map<string, AgentCommandResult | null>();
+  tmuxPanesResult: AgentCommandResult | null = null;
+  tmuxClientsResult: AgentCommandResult | null = null;
 
   async runCommand(
     executable: string,
     args: string[],
     _options?: AgentCommandOptions,
   ): Promise<AgentCommandResult | null> {
+    if (executable === '/bin/sh' && args[0] === '-lc') {
+      const command = args[1] ?? '';
+      if (command.includes('list-panes')) {
+        return this.tmuxPanesResult;
+      }
+      if (command.includes('list-clients')) {
+        return this.tmuxClientsResult;
+      }
+    }
     return this.commandResults.get(`${executable} ${args.join(' ')}`) ?? null;
   }
 
@@ -46,14 +57,19 @@ test('AgentScanner detects global Claude and Codex TTY sessions', async () => {
       '  401     1   401 T    ttys004  /opt/homebrew/bin/claude claude',
     ].join('\n'),
   });
-  runtime.commandResults.set('/bin/sh -lc command -v tmux >/dev/null 2>&1 && tmux list-panes -a -F "#{session_name}\\t#{pane_pid}\\t#{pane_tty}" 2>/dev/null || true', {
+  runtime.tmuxPanesResult = {
     exitCode: 0,
     stderr: '',
     stdout: [
-      'research\t100\t/dev/ttys001',
-      'review\t200\t/dev/ttys002',
+      'research|100|/dev/ttys001',
+      'review|200|/dev/ttys002',
     ].join('\n'),
-  });
+  };
+  runtime.tmuxClientsResult = {
+    exitCode: 0,
+    stderr: '',
+    stdout: '777|/dev/ttys010|research\n',
+  };
   runtime.dirs.set('/Users/example/.claude/sessions', ['201.json']);
   runtime.files.set('/Users/example/.claude/sessions/201.json', JSON.stringify({
     pid: 201,
@@ -75,6 +91,33 @@ test('AgentScanner detects global Claude and Codex TTY sessions', async () => {
   assert.equal(snapshot.clients.find((client) => client.id === 'codex-101')?.state, 'running');
   assert.equal(snapshot.clients.find((client) => client.id === 'codex-101')?.surfaceId, 'tmux:research');
   assert.equal(snapshot.clients.find((client) => client.id === 'claude-201')?.surfaceId, 'tmux:review');
+  assert.deepEqual(snapshot.tmuxClients, [{
+    pid: 777,
+    tty: '/dev/ttys010',
+    sessionName: 'research',
+    surfaceId: 'tmux:research',
+  }]);
+});
+
+test('AgentScanner ignores persistent Codex app companion children', async () => {
+  const runtime = new FakeRuntime();
+  runtime.commandResults.set('/bin/ps -axo pid,ppid,pgid,stat,tty,comm,args', {
+    exitCode: 0,
+    stderr: '',
+    stdout: [
+      '  PID  PPID  PGID STAT TTY      COMM             ARGS',
+      '  501     1   501 S+   ttys009  /opt/homebrew/bin/codex codex resume',
+      '  601   501   601 S    ttys009  /Applications/Co /Applications/Codex.app/Contents/Resources/node_repl',
+      '  602   601   601 S    ttys009  /Applications/Co /Applications/Codex.app/Contents/Resources/codex app-server --listen stdio://',
+    ].join('\n'),
+  });
+
+  const snapshot = await new AgentScanner(runtime, { now: () => 1_700_000_010_000 }).scan();
+
+  assert.equal(snapshot.summary.total, 1);
+  assert.equal(snapshot.summary.running, 0);
+  assert.equal(snapshot.summary.idle, 1);
+  assert.equal(snapshot.clients.find((client) => client.id === 'codex-501')?.state, 'idle');
 });
 
 test('resolveCodexState keeps attention and active states above idle fallbacks', () => {

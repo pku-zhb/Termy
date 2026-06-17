@@ -87,7 +87,22 @@ export class AgentStatusService {
       const snapshot = await this.scanner.scan();
       this.snapshot = { ...snapshot, credits: this.credits };
       this.emit(this.snapshot);
-      debugLog('[AgentStatus] snapshot refreshed', snapshot.summary);
+      debugLog('[AgentStatus] snapshot refreshed', {
+        summary: snapshot.summary,
+        agentPids: snapshot.agentPids,
+        tmuxClients: snapshot.tmuxClients,
+        clients: snapshot.clients.map((client) => ({
+          id: client.id,
+          kind: client.kind,
+          pid: client.pid,
+          parentPid: client.parentPid,
+          processGroupId: client.processGroupId,
+          tty: client.tty,
+          state: client.state,
+          surfaceId: client.surfaceId,
+          workspaceId: client.workspaceId,
+        })),
+      });
       void this.refreshCreditsIfNeeded(forceCredits);
     } catch (error) {
       errorLog('[AgentStatus] refresh failed:', error);
@@ -174,4 +189,5 @@ export type {
   AgentSnapshot,
   AgentState,
   AgentSummary,
+  AgentTmuxClient,
 } from './types.ts';

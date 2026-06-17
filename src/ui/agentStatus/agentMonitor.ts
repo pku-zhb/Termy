@@ -119,10 +119,10 @@ export class AgentMonitor {
     pill.createSpan('termy-agent-pill-count').setText(String(count));
 
     const meters = pill.createDiv('termy-agent-credit-meters');
-    appendMeter(meters, credit ? usedPercent(credit.fiveHourRemainingPercent) : null, '5h usage');
-    appendMeter(meters, credit ? resetElapsedPercent(credit.fiveHourResetAtMs, 5 * 60 * 60 * 1000) : null, '5h reset');
-    appendMeter(meters, credit ? usedPercent(credit.weeklyRemainingPercent) : null, 'weekly usage', 'is-weekly-start');
-    appendMeter(meters, credit ? resetElapsedPercent(credit.weeklyResetAtMs, 7 * 24 * 60 * 60 * 1000) : null, 'weekly reset');
+    appendMeter(meters, credit ? usedPercent(credit.fiveHourRemainingPercent) : null, '5h usage', ['is-usage']);
+    appendMeter(meters, credit ? resetElapsedPercent(credit.fiveHourResetAtMs, 5 * 60 * 60 * 1000) : null, '5h reset', ['is-reset']);
+    appendMeter(meters, credit ? usedPercent(credit.weeklyRemainingPercent) : null, 'weekly usage', ['is-usage', 'is-weekly-start']);
+    appendMeter(meters, credit ? resetElapsedPercent(credit.weeklyResetAtMs, 7 * 24 * 60 * 60 * 1000) : null, 'weekly reset', ['is-reset']);
   }
 
   private appendStatePill(parent: HTMLElement, state: AgentState, count: number): void {
@@ -217,9 +217,9 @@ function agentClientSubtitle(client: AgentClient): string {
   return parts.join(' · ');
 }
 
-function appendMeter(parent: HTMLElement, percent: number | null, title: string, extraClass?: string): void {
+function appendMeter(parent: HTMLElement, percent: number | null, title: string, extraClasses: string[] = []): void {
   const meter = parent.createSpan('termy-agent-credit-meter');
-  if (extraClass) {
+  for (const extraClass of extraClasses) {
     meter.addClass(extraClass);
   }
   meter.style.setProperty('--termy-agent-meter-fill', `${percent ?? 0}%`);
