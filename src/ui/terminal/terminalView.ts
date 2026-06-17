@@ -16,6 +16,13 @@ type PathModule = typeof import('path');
 import type { TerminalService } from '../../services/terminal/terminalService';
 import type { TerminalInstance } from '../../services/terminal/terminalInstance';
 import type { ForegroundInfo } from '../../services/server/types';
+import type {
+  AgentClient,
+  AgentSnapshot,
+  AgentState,
+  AgentStatusService,
+} from '../../services/agentStatus/agentStatusService';
+import { AgentMonitor } from '../agentStatus/agentMonitor';
 import { CLAUDE_ICON, CODEX_ICON, TMUX_ICON } from './statusIcons';
 import {
   collectFallbackDroppedTextPayload,
@@ -89,6 +96,18 @@ interface TerminalCloseRisk {
   processName: string;
 }
 
+interface TerminalTabEntry {
+  terminal: TerminalInstance;
+  paneEl: HTMLElement;
+  customName: string | null;
+  status: TerminalTabStatus;
+}
+
+interface TerminalTabAgentStatus {
+  state: AgentState;
+  clients: AgentClient[];
+}
+
 function isIdleShellForeground(info: ForegroundInfo): boolean {
   if (classifyForeground(info) !== 'none') {
     return false;
@@ -113,14 +132,80 @@ function basenameCommand(command: string): string {
   return basename.replace(/^-+/, '');
 }
 
+function aggregateTabAgentStatus(clients: AgentClient[]): TerminalTabAgentStatus | null {
+  if (clients.length === 0) {
+    return null;
+  }
+
+  if (clients.some((client) => client.state === 'waitingApproval')) {
+    return { state: 'waitingApproval', clients };
+  }
+  if (clients.some((client) => client.state === 'running')) {
+    return { state: 'running', clients };
+  }
+  if (clients.some((client) => client.state === 'unknown')) {
+    return { state: 'unknown', clients };
+  }
+  return { state: 'idle', clients };
+}
+
+function parseTmuxSessionName(commandLine: string): string | null {
+  const tokens = shellTokens(commandLine);
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index];
+    if ((token === '-t' || token === '--target') && tokens[index + 1]) {
+      return normalizeTmuxTarget(tokens[index + 1]);
+    }
+    if (token.startsWith('-t') && token.length > 2) {
+      return normalizeTmuxTarget(token.slice(2));
+    }
+    if (token.startsWith('--target=')) {
+      return normalizeTmuxTarget(token.slice('--target='.length));
+    }
+  }
+  return null;
+}
+
+function normalizeTmuxTarget(target: string): string | null {
+  const normalized = target.trim().replace(/^['"]|['"]$/g, '').split(':')[0]?.trim();
+  return normalized || null;
+}
+
+function shellTokens(commandLine: string): string[] {
+  const matches = commandLine.match(/"[^"]*"|'[^']*'|\S+/g);
+  return matches?.map((token) => token.replace(/^['"]|['"]$/g, '')) ?? [];
+}
+
+function agentStateClass(state: AgentState): string {
+  return state === 'waitingApproval' ? 'waiting-approval' : state;
+}
+
+function agentStateLabel(state: AgentState): string {
+  switch (state) {
+    case 'waitingApproval':
+      return '需处理';
+    case 'running':
+      return '运行';
+    case 'idle':
+    case 'stale':
+      return '空闲';
+    case 'unknown':
+      return '未知';
+  }
+}
+
 /**
  * Terminal view class
  */
 export class TerminalView extends ItemView {
   protected terminalService: TerminalService | null;
+  protected agentStatusService: AgentStatusService | null;
   private terminalInstance: TerminalInstance | null = null;  // 始终指向当前 active 终端
-  private tabs: Array<{ terminal: TerminalInstance; paneEl: HTMLElement; customName: string | null; status: TerminalTabStatus }> = [];
+  private tabs: TerminalTabEntry[] = [];
   private activeIndex = -1;
+  private agentMonitor: AgentMonitor | null = null;
+  private agentStatusUnsubscribe: (() => void) | null = null;
+  private latestAgentSnapshot: AgentSnapshot | null = null;
   private tabBarEl: HTMLElement | null = null;
   private terminalContainer: HTMLElement | null = null;
   private dropHintEl: HTMLElement | null = null;
@@ -145,9 +230,10 @@ export class TerminalView extends ItemView {
   private readonly detachLeafWithoutConfirmation: WorkspaceLeaf['detach'];
   private viewCloseConfirmationPromise: Promise<boolean> | null = null;
 
-  constructor(leaf: WorkspaceLeaf, terminalService: TerminalService | null) {
+  constructor(leaf: WorkspaceLeaf, terminalService: TerminalService | null, agentStatusService: AgentStatusService | null = null) {
     super(leaf);
     this.terminalService = terminalService;
+    this.agentStatusService = agentStatusService;
     this.fs = window.require('fs') as FsModule;
     this.path = window.require('path') as PathModule;
 
@@ -214,6 +300,9 @@ export class TerminalView extends ItemView {
     const container = this.contentEl;
     container.empty();
     container.addClass('terminal-view-container');
+
+    this.agentMonitor = new AgentMonitor(container, this.agentStatusService);
+    this.bindAgentStatusSnapshot();
 
     // 内部 tab 栏（顶部），管理本 view 内的多个终端
     this.tabBarEl = container.createDiv('termy-tab-bar');
@@ -342,6 +431,11 @@ export class TerminalView extends ItemView {
     this.titleChangeCleanup = null;
     this.searchStateCleanup?.();
     this.searchStateCleanup = null;
+    this.agentMonitor?.dispose();
+    this.agentMonitor = null;
+    this.agentStatusUnsubscribe?.();
+    this.agentStatusUnsubscribe = null;
+    this.latestAgentSnapshot = null;
     this.removeDropHandlers?.();
     this.removeDropHandlers = null;
     this.dragEnterDepth = 0;
@@ -364,6 +458,28 @@ export class TerminalView extends ItemView {
 
   setTerminalService(terminalService: TerminalService): void {
     this.terminalService = terminalService;
+  }
+
+  setAgentStatusService(agentStatusService: AgentStatusService): void {
+    this.agentStatusService = agentStatusService;
+    this.agentMonitor?.setService(agentStatusService);
+    this.bindAgentStatusSnapshot();
+  }
+
+  private bindAgentStatusSnapshot(): void {
+    this.agentStatusUnsubscribe?.();
+    this.agentStatusUnsubscribe = null;
+
+    if (!this.agentStatusService) {
+      this.latestAgentSnapshot = null;
+      this.renderTabBar();
+      return;
+    }
+
+    this.agentStatusUnsubscribe = this.agentStatusService.subscribe((snapshot) => {
+      this.latestAgentSnapshot = snapshot;
+      this.renderTabBar();
+    });
   }
 
   /**
@@ -619,6 +735,7 @@ export class TerminalView extends ItemView {
       const tabEl = bar.createDiv('termy-tab');
       tabEl.toggleClass('is-active', i === this.activeIndex);
       tabEl.addEventListener('click', () => this.setActiveTab(i));
+      const tabAgentStatus = this.resolveTabAgentStatus(tab);
 
       // Tab number badge for Opt+number switching (1-9, tenth tab is 0).
       if (i < 10) {
@@ -628,7 +745,8 @@ export class TerminalView extends ItemView {
 
       // Status icon for tmux/Claude/Codex/SSH.
       if (tab.status === 'tmux' || tab.status === 'claude' || tab.status === 'codex') {
-        const iconEl = tabEl.createEl('img', { cls: 'termy-tab-status-icon' });
+        const statusEl = tabEl.createSpan('termy-tab-status');
+        const iconEl = statusEl.createEl('img', { cls: 'termy-tab-status-icon' });
         iconEl.toggleClass('is-tmux', tab.status === 'tmux');
         iconEl.alt = '';
         iconEl.title = tab.status;
@@ -637,6 +755,7 @@ export class TerminalView extends ItemView {
           : tab.status === 'claude'
             ? CLAUDE_ICON
             : CODEX_ICON;
+        this.appendTabAgentLight(statusEl, tabAgentStatus);
       } else if (tab.status === 'ssh') {
         const iconEl = tabEl.createSpan('termy-tab-status-icon');
         setIcon(iconEl, 'globe');
@@ -659,6 +778,55 @@ export class TerminalView extends ItemView {
     const addBtn = bar.createDiv('termy-tab-add');
     setIcon(addBtn, 'plus');
     addBtn.addEventListener('click', () => void this.addTab());
+  }
+
+  private appendTabAgentLight(parent: HTMLElement, status: TerminalTabAgentStatus | null): void {
+    if (!status) {
+      return;
+    }
+
+    const light = parent.createSpan(`termy-tab-agent-light is-${agentStateClass(status.state)}`);
+    light.title = status.clients
+      .map((client) => `${client.kind} ${agentStateLabel(client.state)} pid ${client.pid}`)
+      .join('\n');
+  }
+
+  private resolveTabAgentStatus(tab: TerminalTabEntry): TerminalTabAgentStatus | null {
+    const snapshot = this.latestAgentSnapshot;
+    if (!snapshot || snapshot.clients.length === 0) {
+      return null;
+    }
+
+    const info = this.foregroundByTerminal.get(tab.terminal) ?? tab.terminal.getForeground();
+    const clients = snapshot.clients;
+
+    if (tab.status === 'tmux') {
+      const sessionName = parseTmuxSessionName(info?.cmdline ?? '');
+      if (!sessionName) {
+        return null;
+      }
+      return aggregateTabAgentStatus(clients.filter((client) => client.surfaceId === `tmux:${sessionName}`));
+    }
+
+    if (tab.status === 'claude' || tab.status === 'codex') {
+      const kindClients = clients.filter((client) => client.kind === tab.status);
+      const pid = info?.pid ?? null;
+      if (pid) {
+        const pidMatches = kindClients.filter((client) =>
+          client.pid === pid
+          || client.parentPid === pid
+          || client.processGroupId === pid);
+        const pidStatus = aggregateTabAgentStatus(pidMatches);
+        if (pidStatus) {
+          return pidStatus;
+        }
+      }
+
+      const localClients = kindClients.filter((client) => !client.surfaceId);
+      return localClients.length === 1 ? aggregateTabAgentStatus(localClients) : null;
+    }
+
+    return null;
   }
 
   // —— 供命令调用的 tab 导航 ——
@@ -1504,7 +1672,7 @@ export class TerminalView extends ItemView {
       active: true,
       eState: line ? { line: line - 1, col: 0 } : undefined,
     });
-    this.app.workspace.revealLeaf(leaf);
+    await this.app.workspace.revealLeaf(leaf);
   }
 
   private updateAppearanceStyles(): void {

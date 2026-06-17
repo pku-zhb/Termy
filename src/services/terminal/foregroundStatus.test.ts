@@ -7,11 +7,11 @@ import {
 } from './foregroundStatus.ts';
 
 test('classifyForeground detects local foreground processes only', () => {
-  assert.equal(classifyForeground({ name: 'tmux', cmdline: 'tmux attach' }), 'tmux');
-  assert.equal(classifyForeground({ name: 'ssh', cmdline: 'ssh example.com' }), 'ssh');
-  assert.equal(classifyForeground({ name: 'claude', cmdline: 'claude' }), 'claude');
-  assert.equal(classifyForeground({ name: 'codex', cmdline: 'codex resume' }), 'codex');
-  assert.equal(classifyForeground({ name: 'zsh', cmdline: '-zsh' }), 'none');
+  assert.equal(classifyForeground({ name: 'tmux', cmdline: 'tmux attach', pid: null }), 'tmux');
+  assert.equal(classifyForeground({ name: 'ssh', cmdline: 'ssh example.com', pid: null }), 'ssh');
+  assert.equal(classifyForeground({ name: 'claude', cmdline: 'claude', pid: null }), 'claude');
+  assert.equal(classifyForeground({ name: 'codex', cmdline: 'codex resume', pid: null }), 'codex');
+  assert.equal(classifyForeground({ name: 'zsh', cmdline: '-zsh', pid: null }), 'none');
 });
 
 test('classifyCommandText detects Node-wrapped local AI CLIs via cmdline', () => {

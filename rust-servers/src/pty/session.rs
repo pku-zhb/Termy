@@ -167,9 +167,10 @@ impl PtyWriter {
     }
 }
 
-/// 读取 fd 对应 PTY 的前台进程名 + 完整命令行（macOS，内核级前台进程组）。
+/// 读取 fd 对应 PTY 的前台进程组 + 进程名 + 完整命令行（macOS，内核级前台进程组）。
 ///
-/// 返回 (name, cmdline)：
+/// 返回 (pid, name, cmdline)：
+/// - pid     = 前台进程组 ID；对普通交互 CLI 通常等于前台进程 PID
 /// - name    = argv[0] 的 basename（如 claude、codex、node、tmux、ssh）
 /// - cmdline = 完整命令行（前端据此区分 node 包装的 claude/codex —— argv[0] 是 node，
 ///   但 cmdline 里含 codex.js / claude 路径）
@@ -177,7 +178,7 @@ impl PtyWriter {
 /// 用 KERN_PROCARGS2 读 argv，而非 libproc::pidpath（只拿可执行名，认不出 node 包装的 CLI，
 /// 也认不出 claude.exe），更非 libproc::proc_pid::name（对 claude 进程会 FFI 层段错误）。
 #[cfg(target_os = "macos")]
-pub fn foreground_process(fd: i32) -> Option<(String, String)> {
+pub fn foreground_process(fd: i32) -> Option<(i32, String, String)> {
     let pgid = unsafe { libc::tcgetpgrp(fd) };
     if pgid <= 0 {
         return None;
@@ -188,7 +189,7 @@ pub fn foreground_process(fd: i32) -> Option<(String, String)> {
         .next()
         .map(|arg0| arg0.rsplit('/').next().unwrap_or(arg0).to_string())
         .unwrap_or_default();
-    Some((name, cmdline))
+    Some((pgid, name, cmdline))
 }
 
 /// 读取进程完整命令行 argv（macOS KERN_PROCARGS2，ps 同款机制）。
@@ -245,6 +246,6 @@ fn fg_cmdline(pid: i32) -> Option<String> {
 }
 
 #[cfg(not(target_os = "macos"))]
-pub fn foreground_process(_fd: i32) -> Option<(String, String)> {
+pub fn foreground_process(_fd: i32) -> Option<(i32, String, String)> {
     None
 }

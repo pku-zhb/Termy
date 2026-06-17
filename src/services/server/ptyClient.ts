@@ -387,7 +387,8 @@ export class PtyClient extends ModuleClient {
         if (sessionId) {
           const name = (msg.name as string) || '';
           const cmdline = (msg.cmdline as string) || '';
-          this.emitSessionForeground(sessionId, { name, cmdline });
+          const pid = typeof msg.pid === 'number' && msg.pid > 0 ? msg.pid : null;
+          this.emitSessionForeground(sessionId, { name, cmdline, pid });
         }
         break;
     }

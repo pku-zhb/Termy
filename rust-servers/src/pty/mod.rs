@@ -245,7 +245,7 @@ impl PtyHandler {
             let mut osc_scanner = OscScanner::new();
             let mut pending_shell_events: Vec<OscEvent> = Vec::new();
 
-            let mut last_fg: Option<(String, String)> = None;
+            let mut last_fg: Option<(i32, String, String)> = None;
             const FG_POLL_MS: u64 = 1000;
 
             loop {
@@ -261,9 +261,10 @@ impl PtyHandler {
                     let current = session::foreground_process(fd);
                     if current != last_fg {
                         last_fg = current.clone();
-                        let (name, cmdline) = current.clone().unwrap_or_default();
+                        let (pid, name, cmdline) = current.clone().unwrap_or_default();
                         let fg_payload = serde_json::json!({
                             "session_id": session_id,
+                            "pid": pid,
                             "name": name,
                             "cmdline": cmdline,
                         });
