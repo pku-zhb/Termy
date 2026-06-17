@@ -5,6 +5,16 @@ All notable changes to Termy will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.1] - 2026-06-18
+
+### Added
+- Added a compact in-plugin agent monitor for Claude Code and Codex, including usage/reset meters derived from the active Obsidian theme.
+- Added terminal-tab status styling for Claude, Codex, tmux, running, and approval-needed states, including nested agent indicators for tmux panes.
+
+### Fixed
+- Fixed tmux-hosted Claude/Codex sessions not being matched back to the active Termy tab.
+- Fixed idle Codex sessions being shown as running because persistent helper processes were counted as active work.
+
 ## [1.5.0] - 2026-06-10
 
 ### Added
