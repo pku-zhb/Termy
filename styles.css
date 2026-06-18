@@ -2274,6 +2274,287 @@
   margin-left: 8px;
 }
 
+/* ===================== Agent monitor ===================== */
+.termy-agent-monitor {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+  min-height: 40px;
+  padding: 5px 9px;
+  background-color: color-mix(in srgb, var(--background-primary) 86%, var(--background-secondary));
+  border-bottom: 1px solid var(--background-modifier-border);
+  color: var(--text-muted);
+  cursor: pointer;
+  user-select: none;
+}
+
+.termy-agent-monitor:hover {
+  background-color: var(--background-modifier-hover);
+}
+
+.termy-agent-monitor-activity {
+  flex: 0 0 auto;
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+  background-color: var(--text-faint);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--text-faint) 16%, transparent);
+}
+
+.termy-agent-monitor-activity.is-running {
+  background-color: var(--color-green);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--color-green) 64%, transparent);
+}
+
+.termy-agent-monitor-activity.is-waiting-approval {
+  background-color: var(--color-red);
+  box-shadow: 0 0 9px color-mix(in srgb, var(--color-red) 70%, transparent);
+}
+
+.termy-agent-monitor-summary {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.termy-agent-monitor-summary::-webkit-scrollbar {
+  height: 0;
+}
+
+.termy-agent-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: 0 0 auto;
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  background-color: var(--background-primary);
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  line-height: 1;
+}
+
+.termy-agent-pill-icon {
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+}
+
+.termy-agent-pill.is-kind {
+  gap: 6px;
+}
+
+.termy-agent-pill-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background-color: var(--text-faint);
+}
+
+.termy-agent-pill.is-running .termy-agent-pill-dot {
+  background-color: var(--color-green);
+}
+
+.termy-agent-pill.is-waiting-approval .termy-agent-pill-dot {
+  background-color: var(--color-red);
+}
+
+.termy-agent-pill.is-idle .termy-agent-pill-dot,
+.termy-agent-pill.is-stale .termy-agent-pill-dot {
+  background-color: var(--text-muted);
+}
+
+.termy-agent-pill.is-unknown .termy-agent-pill-dot {
+  background-color: color-mix(in srgb, var(--color-red) 54%, var(--text-muted));
+}
+
+.termy-agent-pill-count {
+  color: var(--text-normal);
+  font-size: var(--font-ui-small);
+  font-weight: var(--font-semibold);
+  font-variant-numeric: tabular-nums;
+}
+
+.termy-agent-credit-meters {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 3px;
+  flex: 0 0 auto;
+  height: 19px;
+  margin-left: 2px;
+}
+
+.termy-agent-credit-meter {
+  position: relative;
+  display: inline-block;
+  width: 7px;
+  height: 19px;
+  overflow: hidden;
+  border-radius: 1px;
+  --termy-agent-meter-color: color-mix(in srgb, var(--interactive-accent) 82%, var(--text-normal));
+  --termy-agent-meter-glow: color-mix(in srgb, var(--interactive-accent) 32%, transparent);
+  background-color: color-mix(in srgb, var(--interactive-accent) 10%, var(--background-modifier-border));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--interactive-accent) 18%, transparent);
+}
+
+.termy-agent-credit-meter.is-usage {
+  --termy-agent-meter-color: color-mix(in srgb, var(--interactive-accent) 84%, var(--text-normal));
+  --termy-agent-meter-glow: color-mix(in srgb, var(--interactive-accent) 34%, transparent);
+}
+
+.termy-agent-credit-meter.is-reset {
+  --termy-agent-meter-color: color-mix(in srgb, var(--text-accent, var(--interactive-accent)) 62%, var(--text-muted));
+  --termy-agent-meter-glow: color-mix(in srgb, var(--text-accent, var(--interactive-accent)) 24%, transparent);
+}
+
+.termy-agent-credit-meter.is-weekly-start {
+  margin-left: 7px;
+}
+
+.termy-agent-credit-meter::after {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: var(--termy-agent-meter-fill, 0%);
+  background-color: var(--termy-agent-meter-color);
+  box-shadow: 0 0 5px var(--termy-agent-meter-glow);
+  content: '';
+}
+
+.termy-agent-credit-meter.is-empty::after {
+  display: none;
+}
+
+.termy-agent-monitor-refresh,
+.termy-agent-monitor-toggle {
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+}
+
+.termy-agent-monitor-panel {
+  flex: 0 0 auto;
+  max-height: min(36vh, 300px);
+  overflow-y: auto;
+  padding: 8px;
+  background-color: var(--background-primary);
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.termy-agent-monitor-panel.is-hidden {
+  display: none;
+}
+
+.termy-agent-monitor-empty {
+  padding: 8px;
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+}
+
+.termy-agent-monitor-section + .termy-agent-monitor-section {
+  margin-top: 10px;
+}
+
+.termy-agent-monitor-section-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 5px;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  font-weight: var(--font-semibold);
+}
+
+.termy-agent-monitor-section-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background-color: var(--background-modifier-border);
+  color: var(--text-normal);
+  font-size: 10px;
+}
+
+.termy-agent-client {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 6px 8px;
+  border-radius: var(--radius-s);
+  color: var(--text-normal);
+}
+
+.termy-agent-client:hover {
+  background-color: var(--background-modifier-hover);
+}
+
+.termy-agent-client-icon {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
+}
+
+.termy-agent-client-body {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.termy-agent-client-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.termy-agent-client-name {
+  overflow: hidden;
+  color: var(--text-normal);
+  font-size: var(--font-ui-small);
+  font-weight: var(--font-medium);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.termy-agent-client-state {
+  flex: 0 0 auto;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background-color: var(--background-modifier-border);
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.termy-agent-client-state.is-running {
+  background-color: color-mix(in srgb, var(--color-green) 16%, transparent);
+  color: var(--color-green);
+}
+
+.termy-agent-client-state.is-waiting-approval {
+  background-color: color-mix(in srgb, var(--color-red) 16%, transparent);
+  color: var(--color-red);
+}
+
+.termy-agent-client-subtitle {
+  margin-top: 2px;
+  overflow: hidden;
+  color: var(--text-faint);
+  font-size: var(--font-ui-smaller);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* ===================== Termy Dev: 单 view 内多终端 tab ===================== */
 .termy-tab-bar {
   display: flex;
@@ -2316,6 +2597,22 @@
   border-color: var(--interactive-accent);
   box-shadow: 0 0 0 1px var(--interactive-accent);
 }
+.termy-tab.has-agent-state {
+  color: var(--text-normal);
+}
+.termy-tab.has-agent-state.is-agent-running {
+  border-color: color-mix(in srgb, var(--color-green) 72%, var(--background-modifier-border));
+  background-color: color-mix(in srgb, var(--color-green) 14%, var(--background-primary));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-green) 24%, transparent);
+}
+.termy-tab.has-agent-state.is-agent-waiting-approval {
+  border-color: color-mix(in srgb, var(--color-red) 76%, var(--background-modifier-border));
+  background-color: color-mix(in srgb, var(--color-red) 13%, var(--background-primary));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-red) 26%, transparent);
+}
+.termy-tab.has-agent-state:hover {
+  filter: brightness(1.03);
+}
 
 /* 序号徽标，对应 Opt+数字切换键 */
 .termy-tab-index {
@@ -2338,6 +2635,17 @@
 }
 
 /* Status icons for tmux, Claude, Codex, and SSH. */
+.termy-tab-status {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  flex: 0 0 auto;
+  min-width: 17px;
+  height: 17px;
+}
+
 .termy-tab-status-icon {
   display: inline-flex;
   align-items: center;

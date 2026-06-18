@@ -12,6 +12,7 @@ import { renderPresetScriptIcon } from './ui/terminal/presetScriptIcons';
 import { TerminalSettingTab } from './settings/settingsTab';
 import type { TerminalService } from './services/terminal/terminalService';
 import type { ServerManager } from './services/server/serverManager';
+import type { AgentStatusService } from './services/agentStatus/agentStatusService';
 import { TERMINAL_VIEW_TYPE, TerminalView } from './ui/terminal/terminalView';
 import { i18n, t } from './i18n';
 import { debugLog, errorLog } from './utils/logger';
@@ -32,6 +33,7 @@ export default class TerminalPlugin extends Plugin {
   // Lazily initialized services
   private _serverManager: ServerManager | null = null;
   private _terminalService: TerminalService | null = null;
+  private _agentStatusService: AgentStatusService | null = null;
   
   // Status bar elements
   private _statusBarItem: HTMLElement | null = null;
@@ -89,6 +91,16 @@ export default class TerminalPlugin extends Plugin {
       debugLog('[TerminalPlugin] TerminalService initialized');
     }
     return this._terminalService;
+  }
+
+  async getAgentStatusService(): Promise<AgentStatusService> {
+    if (!this._agentStatusService) {
+      debugLog('[TerminalPlugin] Initializing AgentStatusService...');
+      const { AgentStatusService } = await import('./services/agentStatus/agentStatusService');
+      this._agentStatusService = new AgentStatusService();
+      debugLog('[TerminalPlugin] AgentStatusService initialized');
+    }
+    return this._agentStatusService;
   }
 
   /**
@@ -165,6 +177,9 @@ export default class TerminalPlugin extends Plugin {
         errorLog('[TerminalPlugin] Failed to shutdown TerminalService:', error);
       }
     }
+
+    this._agentStatusService?.stop();
+    this._agentStatusService = null;
 
     // Stop the server
     if (this._serverManager) {
@@ -1399,10 +1414,14 @@ class TerminalViewPlaceholder extends TerminalView {
     });
 
     try {
-      // Get the real TerminalService
-      const terminalService = await this.plugin.getTerminalService();
+      // Get the real services
+      const [terminalService, agentStatusService] = await Promise.all([
+        this.plugin.getTerminalService(),
+        this.plugin.getAgentStatusService(),
+      ]);
 
       this.setTerminalService(terminalService);
+      this.setAgentStatusService(agentStatusService);
 
       // Clear the placeholder content and initialize the terminal view
       this.contentEl.empty();

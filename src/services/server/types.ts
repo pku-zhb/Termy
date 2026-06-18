@@ -154,6 +154,7 @@ export interface PtyInitResponse {
 export interface ForegroundInfo {
   name: string;
   cmdline: string;
+  pid: number | null;
 }
 
 export interface SessionEventListeners {
