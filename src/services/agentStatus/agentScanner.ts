@@ -8,6 +8,11 @@ import {
   type AgentTmuxClient,
 } from './types.ts';
 import type { AgentStatusRuntime } from './runtime.ts';
+import {
+  loadHookAgentState,
+  matchHookAgentState,
+  type HookAgentStateStore,
+} from './hookState.ts';
 
 interface ProcInfo {
   pid: number;
@@ -93,15 +98,16 @@ export class AgentScanner {
 
     const processes = await this.loadProcesses();
     const processByPid = new Map(processes.map((process) => [process.pid, process]));
-    const claudeSessions = await this.loadClaudeSessions();
-    const [tmuxPaneByTty, tmuxClients] = await Promise.all([
+    const [claudeSessions, hookState, tmuxPaneByTty, tmuxClients] = await Promise.all([
+      this.loadClaudeSessions(),
+      loadHookAgentState(this.runtime),
       this.loadTmuxPanes(),
       this.loadTmuxClients(),
     ]);
 
     const codexClients = await Promise.all(
       this.codexProcesses(processes, processByPid)
-        .map((process) => this.makeCodexClient(process, processes, processByPid, tmuxPaneByTty)),
+        .map((process) => this.makeCodexClient(process, processes, processByPid, tmuxPaneByTty, hookState)),
     );
     const claudeClients = processes
       .filter((process) =>
@@ -109,7 +115,7 @@ export class AgentScanner {
         && this.isClaude(process)
         && !this.isClaudePrintMode(process))
       .map((process) =>
-        this.makeClaudeClient(process, claudeSessions.get(process.pid), processes, processByPid, tmuxPaneByTty));
+        this.makeClaudeClient(process, claudeSessions.get(process.pid), processes, processByPid, tmuxPaneByTty, hookState));
 
     const clients = this.dedupe([...codexClients, ...claudeClients]).sort((a, b) => {
       if (a.kind !== b.kind) {
@@ -275,12 +281,31 @@ export class AgentScanner {
     processes: ProcInfo[],
     processByPid: Map<number, ProcInfo>,
     tmuxPaneByTty: Map<string, TmuxPaneInfo>,
+    hookState: HookAgentStateStore,
   ): Promise<AgentClient> {
     const hasActiveChild = this.hasActiveChildProcess(process.pid, processes, processByPid);
+    let hook = matchHookAgentState(hookState, {
+      kind: 'codex',
+      pid: process.pid,
+      hasActiveChild,
+    }, this.now());
+    const shouldUseHookWithoutRuntime = hook?.authoritativeState === 'running'
+      || hook?.authoritativeState === 'waitingApproval'
+      || hook?.authoritativeState === 'idle';
     const fallbackState = this.processState(hasActiveChild);
-    const runtime = await this.codexRuntimeInfo(process.pid, hasActiveChild);
+    const runtime = shouldUseHookWithoutRuntime
+      ? unknownCodexRuntimeInfo()
+      : await this.codexRuntimeInfo(process.pid, hasActiveChild);
     const thread = runtime.threadId ? await this.codexThreadInfo(runtime.threadId) : null;
-    const state = runtime.state === 'unknown' ? fallbackState : runtime.state;
+    if (!hook && thread?.cwd) {
+      hook = matchHookAgentState(hookState, {
+        kind: 'codex',
+        pid: process.pid,
+        cwd: thread.cwd,
+        hasActiveChild,
+      }, this.now());
+    }
+    const state = hook?.authoritativeState ?? (runtime.state === 'unknown' ? fallbackState : runtime.state);
 
     const tmuxPane = this.tmuxPaneForProcess(process, tmuxPaneByTty);
 
@@ -294,11 +319,11 @@ export class AgentScanner {
       surfaceId: tmuxPane ? `tmux:${tmuxPane.sessionName}` : null,
       tty: process.tty || null,
       state,
-      cwd: thread?.cwd ?? null,
-      title: thread?.title ?? this.processTitle('codex', process),
-      detail: runtime.detail ?? detailText('process', state),
-      lastSeenAtMs: newestTime(runtime.lastSeenAtMs, thread?.updatedAtMs ?? null),
-      waitingSinceMs: state === 'waitingApproval' ? runtime.waitingSinceMs : null,
+      cwd: thread?.cwd ?? hook?.record.cwd ?? null,
+      title: thread?.title ?? hook?.record.title ?? this.processTitle('codex', process),
+      detail: hookDetail(hook?.record.detail ?? null, hook?.record.eventName ?? null) ?? runtime.detail ?? detailText('process', state),
+      lastSeenAtMs: newestTime(runtime.lastSeenAtMs, thread?.updatedAtMs ?? null, hook?.record.updatedAtMs ?? null),
+      waitingSinceMs: state === 'waitingApproval' ? (hook?.record.waitingSinceMs ?? runtime.waitingSinceMs) : null,
     };
   }
 
@@ -308,10 +333,18 @@ export class AgentScanner {
     processes: ProcInfo[],
     processByPid: Map<number, ProcInfo>,
     tmuxPaneByTty: Map<string, TmuxPaneInfo>,
+    hookState: HookAgentStateStore,
   ): AgentClient {
     const hasActiveChild = this.hasActiveChildProcess(process.pid, processes, processByPid);
     const sessionUpdatedAtMs = dateFromMilliseconds(session?.updatedAt);
-    const state = this.claudeState(session, hasActiveChild);
+    const hook = matchHookAgentState(hookState, {
+      kind: 'claude',
+      pid: process.pid,
+      sessionId: session?.sessionId ?? null,
+      cwd: session?.cwd ?? null,
+      hasActiveChild,
+    }, this.now());
+    const state = hook?.authoritativeState ?? this.claudeState(session, hasActiveChild);
     const tmuxPane = this.tmuxPaneForProcess(process, tmuxPaneByTty);
 
     return {
@@ -324,11 +357,11 @@ export class AgentScanner {
       surfaceId: tmuxPane ? `tmux:${tmuxPane.sessionName}` : null,
       tty: process.tty || null,
       state,
-      cwd: session?.cwd?.trim() || null,
-      title: this.claudeTitle(session, process),
-      detail: this.claudeDetail(session, state),
-      lastSeenAtMs: sessionUpdatedAtMs,
-      waitingSinceMs: state === 'waitingApproval' ? sessionUpdatedAtMs : null,
+      cwd: session?.cwd?.trim() || hook?.record.cwd || null,
+      title: this.claudeTitle(session, process, hook?.record.title ?? null),
+      detail: hookDetail(hook?.record.detail ?? null, hook?.record.eventName ?? null) ?? this.claudeDetail(session, state),
+      lastSeenAtMs: newestTime(sessionUpdatedAtMs, hook?.record.updatedAtMs ?? null),
+      waitingSinceMs: state === 'waitingApproval' ? (hook?.record.waitingSinceMs ?? sessionUpdatedAtMs) : null,
     };
   }
 
@@ -363,9 +396,9 @@ export class AgentScanner {
     return this.processState(hasActiveChild);
   }
 
-  private claudeTitle(session: ClaudeSessionInfo | undefined, process: ProcInfo): string {
+  private claudeTitle(session: ClaudeSessionInfo | undefined, process: ProcInfo, hookTitle: string | null): string {
     const name = session?.name?.trim();
-    return name || this.processTitle('claude', process);
+    return name || hookTitle || this.processTitle('claude', process);
   }
 
   private claudeDetail(session: ClaudeSessionInfo | undefined, state: AgentState): string {
@@ -751,6 +784,13 @@ function codexDetail(
     return 'idle';
   }
   return null;
+}
+
+function hookDetail(detail: string | null, eventName: string | null): string | null {
+  if (detail) {
+    return `hook: ${detail}`;
+  }
+  return eventName ? `hook: ${eventName}` : null;
 }
 
 function detailText(source: string, state: AgentState): string {

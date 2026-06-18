@@ -262,7 +262,6 @@ export class TerminalView extends ItemView {
   private searchContainer: HTMLElement | null = null;
   private searchInput: HTMLInputElement | null = null;
   private resizeObserver: ResizeObserver | null = null;
-  private terminalLinkProvider: XtermDisposable | null = null;
   /** 跨行链接悬停时手动铺设的下划线覆盖层元素 */
   private linkHoverDecorations: HTMLElement[] = [];
   private titleChangeCleanup: (() => void) | null = null;
@@ -275,6 +274,7 @@ export class TerminalView extends ItemView {
   private readonly fs: FsModule;
   private readonly path: PathModule;
   private readonly foregroundByTerminal = new WeakMap<TerminalInstance, ForegroundInfo>();
+  private readonly linkProviderByTerminal = new WeakMap<TerminalInstance, XtermDisposable>();
   private readonly closingTabs = new Set<TerminalInstance>();
   private readonly detachLeafWithoutConfirmation: WorkspaceLeaf['detach'];
   private viewCloseConfirmationPromise: Promise<boolean> | null = null;
@@ -475,8 +475,6 @@ export class TerminalView extends ItemView {
     this.resizeObserver?.disconnect();
     this.resizeObserver = null;
     this.clearLinkHoverDecorations();
-    this.terminalLinkProvider?.dispose();
-    this.terminalLinkProvider = null;
     this.titleChangeCleanup?.();
     this.titleChangeCleanup = null;
     this.searchStateCleanup?.();
@@ -492,6 +490,7 @@ export class TerminalView extends ItemView {
     this.dropHintEl = null;
 
     for (const tab of this.tabs) {
+      this.disposeTerminalLinkProvider(tab.terminal);
       try {
         await this.terminalService?.destroyTerminal(tab.terminal.id);
       } catch (error) {
@@ -580,7 +579,7 @@ export class TerminalView extends ItemView {
     } catch (error) {
       errorLog('[TerminalView] Attach tab failed:', error);
     }
-    this.registerTerminalHyperlinkHandler(terminal.getXterm());
+    this.registerTerminalHyperlinkHandler(terminal);
 
     this.tabs.push({ terminal, paneEl, customName: null, status: 'none' });
 
@@ -738,6 +737,7 @@ export class TerminalView extends ItemView {
       }
 
       try {
+        this.disposeTerminalLinkProvider(tab.terminal);
         await this.terminalService?.destroyTerminal(tab.terminal.id);
       } catch (error) {
         errorLog('[TerminalView] Destroy tab failed:', error);
@@ -1004,6 +1004,11 @@ export class TerminalView extends ItemView {
     this.titleChangeCleanup = null;
     this.searchStateCleanup?.();
     this.searchStateCleanup = null;
+  }
+
+  private disposeTerminalLinkProvider(terminal: TerminalInstance): void {
+    this.linkProviderByTerminal.get(terminal)?.dispose();
+    this.linkProviderByTerminal.delete(terminal);
   }
 
   private setupDropHandlers(): () => void {
@@ -1428,7 +1433,9 @@ export class TerminalView extends ItemView {
     terminal.focus();
   }
 
-  private registerTerminalHyperlinkHandler(xterm: XtermTerminal): void {
+  private registerTerminalHyperlinkHandler(terminal: TerminalInstance): void {
+    this.disposeTerminalLinkProvider(terminal);
+    const xterm = terminal.getXterm();
     xterm.options.linkHandler = {
       allowNonHttpProtocols: true,
       activate: (event: MouseEvent, target: string) => {
@@ -1437,8 +1444,7 @@ export class TerminalView extends ItemView {
       },
     };
 
-    this.terminalLinkProvider?.dispose();
-    this.terminalLinkProvider = xterm.registerLinkProvider({
+    const provider = xterm.registerLinkProvider({
       provideLinks: (bufferLineNumber, callback) => {
         const zeroBasedLineNumber = bufferLineNumber - 1;
         if (zeroBasedLineNumber < 0) {
@@ -1523,6 +1529,7 @@ export class TerminalView extends ItemView {
         callback(links.length > 0 ? links : undefined);
       },
     });
+    this.linkProviderByTerminal.set(terminal, provider);
   }
 
   private getTerminalLinkWindow(

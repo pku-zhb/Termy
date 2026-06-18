@@ -5,6 +5,16 @@ All notable changes to Termy will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.3] - 2026-06-18
+
+### Added
+- Added hook-first agent status detection for Claude Code and Codex using machine-local Termy hook state, with the previous process/session/log scanners kept as fallbacks.
+- Added coverage for fresh hook state overriding stale Claude session freshness and Codex sqlite scans.
+
+### Fixed
+- Fixed split Claude `file://` links with encoded spaces not being rejoined across wrapped terminal rows.
+- Fixed terminal hyperlink providers being disposed across tabs by tracking a separate provider for each terminal instance.
+
 ## [1.5.2] - 2026-06-18
 
 ### Changed

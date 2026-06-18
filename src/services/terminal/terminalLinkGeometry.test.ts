@@ -295,6 +295,24 @@ test('mid-line link references join across wraps like line-start ones', () => {
   }
 });
 
+test('link window joins Claude file URLs split before encoded spaces', () => {
+  const rows = [
+    'file:///Users/zhuhuibin/Nutstore%20Files/Nutstore/01%20Research/01%20AI',
+    '%20SEMI%20TECH/08%20NeoCloud/NBIS-CRWV-IREN-订单结构研究.md',
+  ];
+  const buffer = bufferFromLines(rows.map((row) => bufferLineFromText(row)));
+
+  for (const lineNumber of [0, 1]) {
+    const window = buildTerminalLinkWindow(buffer, lineNumber, terminalFileUriLooksOpenAtEnd);
+    assert.ok(window);
+    assert.equal(window.text, rows.join(''));
+    assert.equal(
+      parseTerminalFileUriLinks(window.text)[0]?.uri,
+      rows.join(''),
+    );
+  }
+});
+
 test('link window joins hard-wrapped web URLs with URL-shaped continuation rows', () => {
   const row0 = 'see https://example.com/docs/';
   const row1 = '  path/to/page?query=value';

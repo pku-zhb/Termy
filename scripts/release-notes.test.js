@@ -31,7 +31,9 @@ test('renderReleaseBody describes the package without requiring CHANGELOG.md as 
     repository: 'ZyphrZero/Termy',
   });
 
-  assert.match(body, /Install it as an external CLI at `~\/\.cargo\/bin\/termy-server`/);
+  assert.match(body, /brew tap pku-zhb\/tap/);
+  assert.match(body, /brew upgrade termy-server/);
+  assert.doesNotMatch(body, /~\/\.cargo\/bin\/termy-server/);
   assert.doesNotMatch(body, /Download `termy\.zip`/);
   assert.doesNotMatch(body, /includes all platform binaries and `CHANGELOG\.md`/);
   assert.match(body, /\[Telegram Group\]\(https:\/\/t\.me\/\+t6oRqhaw8c1jNzE1\)/);
