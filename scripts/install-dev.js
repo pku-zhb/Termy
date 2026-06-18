@@ -47,6 +47,7 @@ const colors = {
   yellow: '\x1b[33m',
   red: '\x1b[31m',
   cyan: '\x1b[36m',
+  gray: '\x1b[90m',
 };
 
 function log(message, color = 'reset') {
@@ -141,9 +142,9 @@ function killTermyProcesses() {
       killedAny = execIgnore(`taskkill /F /T /IM ${imageName} 2>nul`) || killedAny;
     }
   } else if (platform === 'macos') {
-    killedAny = execIgnore(`pkill -f ${SERVER_CONFIG.name}-darwin 2>/dev/null || true`) || killedAny;
+    killedAny = execIgnore(`pkill -f ${SERVER_CONFIG.name}-darwin 2>/dev/null`) || killedAny;
   } else {
-    killedAny = execIgnore(`pkill -f ${SERVER_CONFIG.name}-linux 2>/dev/null || true`) || killedAny;
+    killedAny = execIgnore(`pkill -f ${SERVER_CONFIG.name}-linux 2>/dev/null`) || killedAny;
   }
 
   return killedAny;
@@ -319,7 +320,7 @@ async function main() {
   if (!SKIP_BUILD) {
     log('Building plugin (TypeScript)...', 'cyan');
     try {
-      execSync('pnpm build', { cwd: ROOT_DIR, stdio: 'inherit' });
+      execSync('corepack pnpm build', { cwd: ROOT_DIR, stdio: 'inherit' });
     } catch (e) {
       log('\nBuild failed', 'red');
       closeReadline();
@@ -329,6 +330,11 @@ async function main() {
   } else {
     log('Skipping plugin build (--no-build)\n', 'yellow');
   }
+
+  const requiredFiles = [
+    'main.js',
+    'manifest.json',
+    'styles.css',
   ];
 
   for (const file of requiredFiles) {
@@ -384,6 +390,7 @@ async function main() {
     const dest = path.join(targetDir, file);
     await copyFileWithRetry(src, dest);
     log(`  ${file}`, 'green');
+  }
 
   // 6. Restart Obsidian
   if (KILL_OBSIDIAN) {
