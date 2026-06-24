@@ -86,6 +86,7 @@ type XtermBufferRange = import('@xterm/xterm').IBufferRange;
 
 export const TERMINAL_VIEW_TYPE = 'terminal-view';
 const TERMINAL_FOCUS_RETRY_DELAYS_MS = [0, 50, 150] as const;
+const RESTORED_AGENT_METADATA_GRACE_MS = 2 * 60 * 1000;
 const IDLE_SHELL_PROCESS_NAMES = new Set([
   'bash',
   'cmd',
@@ -122,12 +123,16 @@ interface TerminalTabEntry {
   paneEl: HTMLElement;
   customName: string | null;
   status: TerminalTabStatus;
+  lastKnownAgentKind: RestorableAgentKind | null;
+  lastKnownAgentSessionId: string | null;
+  lastKnownAgentProtectedUntilMs: number;
 }
 
 interface AddTerminalTabOptions {
   cwd?: string | null;
   customName?: string | null;
   agentKind?: RestorableAgentKind | null;
+  agentSessionId?: string | null;
   activate?: boolean;
   persist?: boolean;
 }
@@ -258,6 +263,11 @@ function agentStateLabel(state: AgentState): string {
 }
 
 function normalizeRestoredCustomName(value: string | null | undefined): string | null {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : null;
+}
+
+function normalizeRestoredAgentSessionId(value: string | null | undefined): string | null {
   const trimmed = value?.trim();
   return trimmed ? trimmed : null;
 }
@@ -605,6 +615,7 @@ export class TerminalView extends ItemView {
           cwd: restoredTab.cwd,
           customName: restoredTab.customName,
           agentKind: restoredTab.agentKind,
+          agentSessionId: restoredTab.agentSessionId,
           activate: false,
           persist: false,
         });
@@ -670,11 +681,21 @@ export class TerminalView extends ItemView {
     }
     this.registerTerminalHyperlinkHandler(terminal);
 
+    const restoredAgentKind = options.agentKind ?? null;
+    const restoredAgentSessionId = restoredAgentKind
+      ? normalizeRestoredAgentSessionId(options.agentSessionId)
+      : null;
+
     this.tabs.push({
       terminal,
       paneEl,
       customName: normalizeRestoredCustomName(options.customName),
       status: options.agentKind ?? 'none',
+      lastKnownAgentKind: restoredAgentSessionId ? restoredAgentKind : null,
+      lastKnownAgentSessionId: restoredAgentSessionId,
+      lastKnownAgentProtectedUntilMs: restoredAgentSessionId
+        ? Date.now() + RESTORED_AGENT_METADATA_GRACE_MS
+        : 0,
     });
 
     // Track foreground changes so the tab can show tmux/ssh/Claude/Codex status.
@@ -840,7 +861,12 @@ export class TerminalView extends ItemView {
     const matchedClient = this.matchingAgentClientsForTab(tab).find((client) =>
       client.kind === 'claude' || client.kind === 'codex');
     if (matchedClient) {
+      this.rememberAgentClient(tab, matchedClient);
       return matchedClient.kind;
+    }
+    const lastKnownAgent = this.preservedLastKnownAgent(tab);
+    if (lastKnownAgent) {
+      return lastKnownAgent.kind;
     }
     if (tab.status === 'claude' || tab.status === 'codex') {
       return tab.status;
@@ -856,7 +882,57 @@ export class TerminalView extends ItemView {
   private resolveRestorableAgentSessionId(tab: TerminalTabEntry): string | null {
     const matchedClient = this.matchingAgentClientsForTab(tab).find((client) =>
       client.agentSessionId !== null);
-    return matchedClient?.agentSessionId ?? null;
+    if (matchedClient?.agentSessionId) {
+      this.rememberAgentClient(tab, matchedClient);
+      return matchedClient.agentSessionId;
+    }
+    return this.preservedLastKnownAgent(tab)?.sessionId ?? null;
+  }
+
+  private rememberAgentClient(tab: TerminalTabEntry, client: AgentClient): void {
+    if ((client.kind !== 'claude' && client.kind !== 'codex') || !client.agentSessionId) {
+      return;
+    }
+
+    tab.lastKnownAgentKind = client.kind;
+    tab.lastKnownAgentSessionId = client.agentSessionId;
+    tab.lastKnownAgentProtectedUntilMs = 0;
+  }
+
+  private preservedLastKnownAgent(tab: TerminalTabEntry): { kind: RestorableAgentKind; sessionId: string } | null {
+    const kind = tab.lastKnownAgentKind;
+    const sessionId = normalizeRestoredAgentSessionId(tab.lastKnownAgentSessionId);
+    if (!kind || !sessionId) {
+      return null;
+    }
+
+    if (Date.now() <= tab.lastKnownAgentProtectedUntilMs) {
+      return { kind, sessionId };
+    }
+
+    if (tab.status === kind) {
+      return { kind, sessionId };
+    }
+
+    if (kind === 'claude' && tab.terminal.isClaudeCodeSession()) {
+      return { kind, sessionId };
+    }
+
+    const foreground = this.foregroundByTerminal.get(tab.terminal) ?? tab.terminal.getForeground();
+    return classifyForeground(foreground) === kind
+      ? { kind, sessionId }
+      : null;
+  }
+
+  private clearExpiredLastKnownAgent(terminal: TerminalInstance): void {
+    const tab = this.tabs.find((candidate) => candidate.terminal === terminal);
+    if (!tab || Date.now() <= tab.lastKnownAgentProtectedUntilMs) {
+      return;
+    }
+
+    tab.lastKnownAgentKind = null;
+    tab.lastKnownAgentSessionId = null;
+    tab.lastKnownAgentProtectedUntilMs = 0;
   }
 
   private setTerminalTabStatus(terminal: TerminalInstance, status: TerminalTabStatus): void {
@@ -885,6 +961,7 @@ export class TerminalView extends ItemView {
 
     if (isIdleShellForeground(info)) {
       terminal.resetClaudeCodeSession();
+      this.clearExpiredLastKnownAgent(terminal);
       this.setTerminalTabStatus(terminal, 'none');
       return;
     }
@@ -1119,6 +1196,15 @@ export class TerminalView extends ItemView {
 
     const info = this.foregroundByTerminal.get(tab.terminal) ?? tab.terminal.getForeground();
     const clients = snapshot.clients;
+    const lastKnownSessionId = normalizeRestoredAgentSessionId(tab.lastKnownAgentSessionId);
+    if (lastKnownSessionId) {
+      const sessionMatches = clients.filter((client) =>
+        client.agentSessionId === lastKnownSessionId
+        && (!tab.lastKnownAgentKind || client.kind === tab.lastKnownAgentKind));
+      if (sessionMatches.length > 0) {
+        return sessionMatches;
+      }
+    }
 
     if (tab.status === 'tmux') {
       const sessionName = resolveTmuxSessionName(snapshot, info);
