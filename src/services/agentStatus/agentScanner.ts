@@ -344,7 +344,9 @@ export class AgentScanner {
       cwd: session?.cwd ?? null,
       hasActiveChild,
     }, this.now());
-    const state = hook?.authoritativeState ?? this.claudeState(session, hasActiveChild);
+    const nativeState = this.claudeState(session, hasActiveChild);
+    const hookStateOverride = this.claudeHookState(hook?.authoritativeState ?? null, session, hasActiveChild);
+    const state = hookStateOverride ?? nativeState;
     const tmuxPane = this.tmuxPaneForProcess(process, tmuxPaneByTty);
 
     return {
@@ -359,7 +361,9 @@ export class AgentScanner {
       state,
       cwd: session?.cwd?.trim() || hook?.record.cwd || null,
       title: this.claudeTitle(session, process, hook?.record.title ?? null),
-      detail: hookDetail(hook?.record.detail ?? null, hook?.record.eventName ?? null) ?? this.claudeDetail(session, state),
+      detail: hookStateOverride
+        ? hookDetail(hook?.record.detail ?? null, hook?.record.eventName ?? null) ?? this.claudeDetail(session, state)
+        : this.claudeDetail(session, state),
       lastSeenAtMs: newestTime(sessionUpdatedAtMs, hook?.record.updatedAtMs ?? null),
       waitingSinceMs: state === 'waitingApproval' ? (hook?.record.waitingSinceMs ?? sessionUpdatedAtMs) : null,
     };
@@ -394,6 +398,39 @@ export class AgentScanner {
       return 'stale';
     }
     return this.processState(hasActiveChild);
+  }
+
+  private claudeHookState(
+    hookState: AgentState | null,
+    session: ClaudeSessionInfo | undefined,
+    hasActiveChild: boolean,
+  ): AgentState | null {
+    if (!hookState) {
+      return null;
+    }
+    if (hookState !== 'running') {
+      return hookState;
+    }
+    if (hasActiveChild) {
+      return 'running';
+    }
+
+    const compact = compactStatus(session?.status?.trim() ?? '');
+    const nativeSessionIsExplicitlyIdle = compact === 'idle' || compact === 'ready';
+    const nativeSessionNeedsAttention = [
+      'waiting',
+      'needsinput',
+      'needsapproval',
+      'waitingapproval',
+      'blocked',
+      'paused',
+    ].includes(compact);
+    const nativeSessionIsClosed = ['ended', 'exited', 'closed'].includes(compact);
+    if (nativeSessionIsExplicitlyIdle || nativeSessionNeedsAttention || nativeSessionIsClosed) {
+      return null;
+    }
+
+    return 'running';
   }
 
   private claudeTitle(session: ClaudeSessionInfo | undefined, process: ProcInfo, hookTitle: string | null): string {

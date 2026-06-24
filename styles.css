@@ -2371,7 +2371,7 @@
 }
 
 .termy-agent-pill.is-unknown .termy-agent-pill-dot {
-  background-color: color-mix(in srgb, var(--color-red) 54%, var(--text-muted));
+  background-color: var(--text-faint);
 }
 
 .termy-agent-pill-count {
