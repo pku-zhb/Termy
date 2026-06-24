@@ -1,5 +1,13 @@
 import { debugLog, errorLog } from '@/utils/logger';
 import { AgentScanner } from './agentScanner.ts';
+import {
+  BrowserAgentStatusNotifier,
+  createAgentStatusNotification,
+  resolveAgentDisplayState,
+  resolveAgentStatusTransition,
+  type AgentDisplayState,
+  type AgentStatusNotifier,
+} from './agentStatusNotifications.ts';
 import { CreditScanner } from './creditScanner.ts';
 import { createElectronAgentStatusRuntime, type AgentStatusRuntime } from './runtime.ts';
 import {
@@ -17,6 +25,7 @@ export interface AgentStatusServiceOptions {
   creditRefreshIntervalMs?: number;
   creditRetryIntervalMs?: number;
   runtime?: AgentStatusRuntime;
+  notifier?: AgentStatusNotifier | null;
 }
 
 export class AgentStatusService {
@@ -25,6 +34,7 @@ export class AgentStatusService {
   private readonly scanIntervalMs: number;
   private readonly creditRefreshIntervalMs: number;
   private readonly creditRetryIntervalMs: number;
+  private readonly notifier: AgentStatusNotifier | null;
   private readonly listeners = new Set<AgentStatusListener>();
   private snapshot: AgentSnapshot = EMPTY_AGENT_SNAPSHOT;
   private credits: AgentCreditSnapshot = EMPTY_AGENT_CREDIT_SNAPSHOT;
@@ -32,6 +42,7 @@ export class AgentStatusService {
   private scanInFlight = false;
   private creditRefreshInFlight = false;
   private nextCreditRefreshAt = 0;
+  private displayState: AgentDisplayState | null = null;
 
   constructor(options: AgentStatusServiceOptions = {}) {
     const runtime = options.runtime ?? createElectronAgentStatusRuntime();
@@ -40,6 +51,9 @@ export class AgentStatusService {
     this.scanIntervalMs = options.scanIntervalMs ?? 5000;
     this.creditRefreshIntervalMs = options.creditRefreshIntervalMs ?? 5 * 60 * 1000;
     this.creditRetryIntervalMs = options.creditRetryIntervalMs ?? 60 * 1000;
+    this.notifier = options.notifier === undefined
+      ? new BrowserAgentStatusNotifier(runtime.platform)
+      : options.notifier;
   }
 
   getSnapshot(): AgentSnapshot {
@@ -85,8 +99,10 @@ export class AgentStatusService {
     this.scanInFlight = true;
     try {
       const snapshot = await this.scanner.scan();
-      this.snapshot = { ...snapshot, credits: this.credits };
-      this.emit(this.snapshot);
+      const nextSnapshot = { ...snapshot, credits: this.credits };
+      this.notifyDisplayTransition(nextSnapshot);
+      this.snapshot = nextSnapshot;
+      this.emit(nextSnapshot);
       debugLog('[AgentStatus] snapshot refreshed', {
         summary: snapshot.summary,
         agentPids: snapshot.agentPids,
@@ -119,6 +135,21 @@ export class AgentStatusService {
         errorLog('[AgentStatus] listener failed:', error);
       }
     }
+  }
+
+  private notifyDisplayTransition(snapshot: AgentSnapshot): void {
+    const nextDisplayState = resolveAgentDisplayState(snapshot);
+    const transition = resolveAgentStatusTransition(this.displayState, nextDisplayState);
+    this.displayState = nextDisplayState;
+
+    if (!transition || !this.notifier) {
+      return;
+    }
+
+    const notification = createAgentStatusNotification(transition, snapshot);
+    void Promise.resolve(this.notifier.notify(notification)).catch((error) => {
+      errorLog('[AgentStatus] notification failed:', error);
+    });
   }
 
   private async refreshCreditsIfNeeded(force: boolean): Promise<void> {
