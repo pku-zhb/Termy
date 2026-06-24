@@ -11,6 +11,7 @@ import { shell, webUtils } from 'electron';
  * (Electron caches `require` results).
  */
 type FsModule = typeof import('fs');
+type OsModule = typeof import('os');
 type PathModule = typeof import('path');
 
 import type { TerminalService } from '../../services/terminal/terminalService';
@@ -87,6 +88,7 @@ type XtermBufferRange = import('@xterm/xterm').IBufferRange;
 export const TERMINAL_VIEW_TYPE = 'terminal-view';
 const TERMINAL_FOCUS_RETRY_DELAYS_MS = [0, 50, 150] as const;
 const RESTORED_AGENT_METADATA_GRACE_MS = 2 * 60 * 1000;
+const CLAUDE_HOOK_SESSION_LOOKBACK_MS = 10 * 60 * 1000;
 const IDLE_SHELL_PROCESS_NAMES = new Set([
   'bash',
   'cmd',
@@ -305,6 +307,7 @@ export class TerminalView extends ItemView {
   private manualViewDetachRequested = false;
 
   private readonly fs: FsModule;
+  private readonly homeDir: string;
   private readonly path: PathModule;
   private readonly restoreStore: TerminalRestoreStore | null;
   private readonly foregroundByTerminal = new WeakMap<TerminalInstance, ForegroundInfo>();
@@ -324,6 +327,8 @@ export class TerminalView extends ItemView {
     this.agentStatusService = agentStatusService;
     this.restoreStore = restoreStore;
     this.fs = window.require('fs') as FsModule;
+    const os = window.require('os') as OsModule;
+    this.homeDir = os.homedir();
     this.path = window.require('path') as PathModule;
 
     // 终端 view 聚焦时声明独占 Esc：Obsidian 在自己的 keymap 动作前会先查 view 的 scope，
@@ -864,6 +869,11 @@ export class TerminalView extends ItemView {
       this.rememberAgentClient(tab, matchedClient);
       return matchedClient.kind;
     }
+    const hookAgent = this.claudeHookAgentForTab(tab);
+    if (hookAgent) {
+      this.rememberAgent(tab, hookAgent.kind, hookAgent.sessionId);
+      return hookAgent.kind;
+    }
     const lastKnownAgent = this.preservedLastKnownAgent(tab);
     if (lastKnownAgent) {
       return lastKnownAgent.kind;
@@ -886,6 +896,11 @@ export class TerminalView extends ItemView {
       this.rememberAgentClient(tab, matchedClient);
       return matchedClient.agentSessionId;
     }
+    const hookAgent = this.claudeHookAgentForTab(tab);
+    if (hookAgent) {
+      this.rememberAgent(tab, hookAgent.kind, hookAgent.sessionId);
+      return hookAgent.sessionId;
+    }
     return this.preservedLastKnownAgent(tab)?.sessionId ?? null;
   }
 
@@ -894,9 +909,25 @@ export class TerminalView extends ItemView {
       return;
     }
 
-    tab.lastKnownAgentKind = client.kind;
-    tab.lastKnownAgentSessionId = client.agentSessionId;
+    this.rememberAgent(tab, client.kind, client.agentSessionId);
+  }
+
+  private rememberAgent(tab: TerminalTabEntry, kind: RestorableAgentKind, sessionId: string): void {
+    tab.lastKnownAgentKind = kind;
+    tab.lastKnownAgentSessionId = sessionId;
     tab.lastKnownAgentProtectedUntilMs = 0;
+  }
+
+  private markObservedAgentKind(terminal: TerminalInstance, kind: RestorableAgentKind): void {
+    const tab = this.tabs.find((candidate) => candidate.terminal === terminal);
+    if (!tab) {
+      return;
+    }
+
+    tab.lastKnownAgentKind = kind;
+    if (!tab.lastKnownAgentSessionId) {
+      tab.lastKnownAgentProtectedUntilMs = Date.now() + RESTORED_AGENT_METADATA_GRACE_MS;
+    }
   }
 
   private preservedLastKnownAgent(tab: TerminalTabEntry): { kind: RestorableAgentKind; sessionId: string } | null {
@@ -922,6 +953,88 @@ export class TerminalView extends ItemView {
     return classifyForeground(foreground) === kind
       ? { kind, sessionId }
       : null;
+  }
+
+  private claudeHookAgentForTab(tab: TerminalTabEntry): { kind: 'claude'; sessionId: string } | null {
+    if (!this.shouldUseClaudeHookFallback(tab)) {
+      return null;
+    }
+
+    const cwd = this.safeTerminalCwd(tab.terminal);
+    if (!cwd) {
+      return null;
+    }
+
+    const sessions = this.readHookAgentSessions();
+    const now = Date.now();
+    const match = sessions
+      .filter((session) =>
+        session.agent === 'claude'
+        && session.cwd === cwd
+        && session.sessionId
+        && session.updatedAtMs !== null
+        && now - session.updatedAtMs <= CLAUDE_HOOK_SESSION_LOOKBACK_MS)
+      .sort((left, right) => (right.updatedAtMs ?? 0) - (left.updatedAtMs ?? 0))[0];
+
+    return match?.sessionId ? { kind: 'claude', sessionId: match.sessionId } : null;
+  }
+
+  private shouldUseClaudeHookFallback(tab: TerminalTabEntry): boolean {
+    if (tab.lastKnownAgentKind === 'claude' || tab.status === 'claude' || tab.terminal.isClaudeCodeSession()) {
+      return true;
+    }
+
+    const foreground = this.foregroundByTerminal.get(tab.terminal) ?? tab.terminal.getForeground();
+    return classifyForeground(foreground) === 'claude';
+  }
+
+  private readHookAgentSessions(): Array<{
+    agent: AgentKind;
+    sessionId: string | null;
+    cwd: string | null;
+    updatedAtMs: number | null;
+  }> {
+    try {
+      const file = this.path.join(this.homeDir, '.termy', 'agent-status', 'state.json');
+      const raw = JSON.parse(this.fs.readFileSync(file, 'utf8')) as { sessions?: unknown };
+      if (!raw.sessions || typeof raw.sessions !== 'object') {
+        return [];
+      }
+      return Object.values(raw.sessions).map((value) => this.normalizeHookAgentSession(value)).filter((session) =>
+        session !== null);
+    } catch {
+      return [];
+    }
+  }
+
+  private normalizeHookAgentSession(value: unknown): {
+    agent: AgentKind;
+    sessionId: string | null;
+    cwd: string | null;
+    updatedAtMs: number | null;
+  } | null {
+    if (!value || typeof value !== 'object') {
+      return null;
+    }
+
+    const record = value as {
+      agent?: unknown;
+      sessionId?: unknown;
+      cwd?: unknown;
+      updatedAtMs?: unknown;
+    };
+    if (record.agent !== 'claude' && record.agent !== 'codex') {
+      return null;
+    }
+
+    return {
+      agent: record.agent,
+      sessionId: typeof record.sessionId === 'string' && record.sessionId.trim() ? record.sessionId.trim() : null,
+      cwd: typeof record.cwd === 'string' && record.cwd.trim() ? record.cwd.trim() : null,
+      updatedAtMs: typeof record.updatedAtMs === 'number' && Number.isFinite(record.updatedAtMs)
+        ? record.updatedAtMs
+        : null,
+    };
   }
 
   private clearExpiredLastKnownAgent(terminal: TerminalInstance): void {
@@ -954,6 +1067,9 @@ export class TerminalView extends ItemView {
     if (foregroundStatus !== 'none') {
       if (foregroundStatus !== 'claude') {
         terminal.resetClaudeCodeSession();
+      }
+      if (foregroundStatus === 'claude' || foregroundStatus === 'codex') {
+        this.markObservedAgentKind(terminal, foregroundStatus);
       }
       this.setTerminalTabStatus(terminal, foregroundStatus);
       return;
