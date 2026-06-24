@@ -711,13 +711,43 @@ export class TerminalView extends ItemView {
       return;
     }
 
+    this.sendRestoredAgentCommandWhenReady(terminal, command, restoredTab, 0);
+  }
+
+  private sendRestoredAgentCommandWhenReady(
+    terminal: TerminalInstance,
+    command: string,
+    restoredTab: RestoredTerminalTab,
+    attempt: number,
+  ): void {
+    const maxAttempts = 16;
+    const delayMs = attempt === 0 ? 600 : 500;
+
     window.setTimeout(() => {
-      if (!this.tabs.some((tab) => tab.terminal === terminal) || !terminal.isAlive()) {
+      if (!this.tabs.some((tab) => tab.terminal === terminal)) {
         return;
       }
+
+      if (!terminal.isAlive()) {
+        if (attempt < maxAttempts) {
+          this.sendRestoredAgentCommandWhenReady(terminal, command, restoredTab, attempt + 1);
+        } else {
+          errorLog('[TerminalView] Restored agent command skipped because terminal never became ready:', {
+            agentKind: restoredTab.agentKind,
+            agentSessionId: restoredTab.agentSessionId,
+          });
+        }
+        return;
+      }
+
       terminal.sendText(`${command}\r`);
+      debugLog('[TerminalView] Sent restored agent command:', {
+        agentKind: restoredTab.agentKind,
+        agentSessionId: restoredTab.agentSessionId,
+        attempt,
+      });
       this.scheduleRestoreStatePersist();
-    }, 600);
+    }, delayMs);
   }
 
   private resolveRestoredCwd(cwd: string | null | undefined): string | undefined {
