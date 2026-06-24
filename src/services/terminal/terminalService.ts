@@ -45,6 +45,10 @@ export interface DefaultShellOption {
   selected: boolean;
 }
 
+export interface CreateTerminalOptions {
+  cwd?: string | null;
+}
+
 // Start preloading immediately
 void preloadTerminalInstance().catch((error) => {
   errorLog('[TerminalService] 预加载 TerminalInstance 失败:', error);
@@ -193,7 +197,7 @@ export class TerminalService {
    * @returns The created terminal instance
    * @throws Error if terminal creation fails
    */
-  async createTerminal(): Promise<TerminalInstance> {
+  async createTerminal(options: CreateTerminalOptions = {}): Promise<TerminalInstance> {
     try {
       // Ensure the server is running
       await this.serverManager.ensureServer();
@@ -204,8 +208,8 @@ export class TerminalService {
       const { TerminalInstance } = await preloadTerminalInstance();
       
       // Get the working directory if auto-entering the vault directory is enabled
-      let cwd: string | undefined;
-      if (this.settings.autoEnterVaultDirectory) {
+      let cwd = normalizeOptionalPath(options.cwd);
+      if (!cwd && this.settings.autoEnterVaultDirectory) {
         cwd = this.getVaultPath();
         if (cwd) {
           debugLog(`[TerminalService] 自动进入项目目录: ${cwd}`);
@@ -436,4 +440,9 @@ export class TerminalService {
     
     debugLog('[TerminalService] 终端服务已关闭');
   }
+}
+
+function normalizeOptionalPath(value: string | null | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
 }

@@ -13,6 +13,7 @@ import { TerminalSettingTab } from './settings/settingsTab';
 import type { TerminalService } from './services/terminal/terminalService';
 import type { ServerManager } from './services/server/serverManager';
 import type { AgentStatusService } from './services/agentStatus/agentStatusService';
+import { TerminalRestoreStore, hasRestorableAgentTabs } from './services/terminal/terminalRestoreState';
 import { TERMINAL_VIEW_TYPE, TerminalView } from './ui/terminal/terminalView';
 import { i18n, t } from './i18n';
 import { debugLog, errorLog } from './utils/logger';
@@ -34,6 +35,7 @@ export default class TerminalPlugin extends Plugin {
   private _serverManager: ServerManager | null = null;
   private _terminalService: TerminalService | null = null;
   private _agentStatusService: AgentStatusService | null = null;
+  private _terminalRestoreStore: TerminalRestoreStore | null = null;
   
   // Status bar elements
   private _statusBarItem: HTMLElement | null = null;
@@ -103,6 +105,13 @@ export default class TerminalPlugin extends Plugin {
     return this._agentStatusService;
   }
 
+  getTerminalRestoreStore(): TerminalRestoreStore {
+    if (!this._terminalRestoreStore) {
+      this._terminalRestoreStore = TerminalRestoreStore.fromElectron(this.getVaultBasePath());
+    }
+    return this._terminalRestoreStore;
+  }
+
   /**
    * Called when the plugin loads
    */
@@ -142,12 +151,29 @@ export default class TerminalPlugin extends Plugin {
     this.app.workspace.onLayoutReady(() => {
       this.registerNewTabTerminalAction();
       this.registerTerminalAutoFocus();
+      void this.restoreTerminalViewIfNeeded();
     });
 
     // Add the settings tab
     this.addSettingTab(new TerminalSettingTab(this.app, this));
 
     debugLog(t('plugin.loadedMessage'));
+  }
+
+  private async restoreTerminalViewIfNeeded(): Promise<void> {
+    if (this.app.workspace.getLeavesOfType(TERMINAL_VIEW_TYPE).length > 0) {
+      return;
+    }
+
+    try {
+      const snapshot = await this.getTerminalRestoreStore().loadSnapshot();
+      if (!hasRestorableAgentTabs(snapshot)) {
+        return;
+      }
+      await this.activateTerminalView(this.getLeafForNewTerminal());
+    } catch (error) {
+      errorLog('[TerminalPlugin] Failed to restore Termy view:', error);
+    }
   }
 
   /**
@@ -159,6 +185,8 @@ export default class TerminalPlugin extends Plugin {
 
   private async handleUnload(): Promise<void> {
     debugLog(t('plugin.unloadingMessage'));
+
+    await this.persistTerminalViewsForUnload();
 
     // Clean up the feature visibility manager
     if (this.featureVisibilityManager) {
@@ -193,6 +221,16 @@ export default class TerminalPlugin extends Plugin {
     }
 
     debugLog(t('plugin.unloadedMessage'));
+  }
+
+  private async persistTerminalViewsForUnload(): Promise<void> {
+    const leaves = this.app.workspace.getLeavesOfType(TERMINAL_VIEW_TYPE);
+    await Promise.all(leaves.map(async (leaf) => {
+      const view = leaf.view;
+      if (view instanceof TerminalView) {
+        await view.persistRestoreStateForUnload();
+      }
+    }));
   }
 
 
@@ -1383,6 +1421,14 @@ export default class TerminalPlugin extends Plugin {
     return normalizePath(`${vaultPath}/${manifestDir}`);
   }
 
+  private getVaultBasePath(): string {
+    const adapter = this.app.vault.adapter;
+    if (adapter instanceof FileSystemAdapter) {
+      return normalizePath(adapter.getBasePath());
+    }
+    return this.app.vault.getName();
+  }
+
   private isAbsolutePath(path: string): boolean {
     return path.startsWith('/') || /^[A-Za-z]:\//.test(path);
   }
@@ -1399,7 +1445,7 @@ class TerminalViewPlaceholder extends TerminalView {
 
   constructor(leaf: WorkspaceLeaf, plugin: TerminalPlugin) {
     // Inject TerminalService lazily to avoid loading xterm.js at startup
-    super(leaf, null);
+    super(leaf, null, null, plugin.getTerminalRestoreStore());
     this.plugin = plugin;
   }
 

@@ -36,6 +36,13 @@ import {
   type TerminalTabStatus,
 } from '../../services/terminal/foregroundStatus';
 import {
+  TerminalRestoreStore,
+  restoredAgentCommand,
+  type RestorableAgentKind,
+  type RestoredTerminalTab,
+  type TerminalRestoreSnapshot,
+} from '../../services/terminal/terminalRestoreState';
+import {
   collectTerminalReferenceCandidatePaths,
   fileUriToPlatformPath,
   findUniqueTerminalEntryByBasename,
@@ -115,6 +122,14 @@ interface TerminalTabEntry {
   paneEl: HTMLElement;
   customName: string | null;
   status: TerminalTabStatus;
+}
+
+interface AddTerminalTabOptions {
+  cwd?: string | null;
+  customName?: string | null;
+  agentKind?: RestorableAgentKind | null;
+  activate?: boolean;
+  persist?: boolean;
 }
 
 interface TerminalTabAgentStatus {
@@ -242,6 +257,11 @@ function agentStateLabel(state: AgentState): string {
   }
 }
 
+function normalizeRestoredCustomName(value: string | null | undefined): string | null {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : null;
+}
+
 /**
  * Terminal view class
  */
@@ -270,19 +290,29 @@ export class TerminalView extends ItemView {
   private initResolve: ((terminal: TerminalInstance) => void) | null = null;
   private initReject: ((error: Error) => void) | null = null;
   private pendingFocusTimeouts: number[] = [];
+  private restorePersistTimeout: number | null = null;
+  private isRestoringTabs = false;
+  private manualViewDetachRequested = false;
 
   private readonly fs: FsModule;
   private readonly path: PathModule;
+  private readonly restoreStore: TerminalRestoreStore | null;
   private readonly foregroundByTerminal = new WeakMap<TerminalInstance, ForegroundInfo>();
   private readonly linkProviderByTerminal = new WeakMap<TerminalInstance, XtermDisposable>();
   private readonly closingTabs = new Set<TerminalInstance>();
   private readonly detachLeafWithoutConfirmation: WorkspaceLeaf['detach'];
   private viewCloseConfirmationPromise: Promise<boolean> | null = null;
 
-  constructor(leaf: WorkspaceLeaf, terminalService: TerminalService | null, agentStatusService: AgentStatusService | null = null) {
+  constructor(
+    leaf: WorkspaceLeaf,
+    terminalService: TerminalService | null,
+    agentStatusService: AgentStatusService | null = null,
+    restoreStore: TerminalRestoreStore | null = null,
+  ) {
     super(leaf);
     this.terminalService = terminalService;
     this.agentStatusService = agentStatusService;
+    this.restoreStore = restoreStore;
     this.fs = window.require('fs') as FsModule;
     this.path = window.require('path') as PathModule;
 
@@ -336,6 +366,7 @@ export class TerminalView extends ItemView {
                 view.terminalInstance.setTitle(trimmedTitle);
                 this.updateLeafHeader(view.leaf);
                 view.updateDropHintText();
+                view.scheduleRestoreStatePersist();
               }
             }
           ).open();
@@ -370,7 +401,7 @@ export class TerminalView extends ItemView {
 
     window.setTimeout(() => {
       if (this.tabs.length === 0 && this.terminalContainer) {
-        void this.addTab();
+        void this.restoreTabsOrCreateDefault();
       }
     }, 0);
     return Promise.resolve();
@@ -471,6 +502,12 @@ export class TerminalView extends ItemView {
 
   async onClose(): Promise<void> {
     this.clearPendingFocusTimeouts();
+    this.clearRestorePersistTimeout();
+    if (this.manualViewDetachRequested) {
+      await this.clearRestoreState();
+    } else {
+      await this.persistRestoreStateNow();
+    }
     this.leaf.detach = this.detachLeafWithoutConfirmation;
     this.resizeObserver?.disconnect();
     this.resizeObserver = null;
@@ -503,6 +540,13 @@ export class TerminalView extends ItemView {
 
     this.containerEl.empty();
     this.disposeAppearanceStyle();
+  }
+
+  async persistRestoreStateForUnload(): Promise<void> {
+    this.clearRestorePersistTimeout();
+    if (!this.manualViewDetachRequested) {
+      await this.persistRestoreStateNow();
+    }
   }
 
   setTerminalService(terminalService: TerminalService): void {
@@ -539,17 +583,62 @@ export class TerminalView extends ItemView {
     await this.addTab();
   }
 
+  private async restoreTabsOrCreateDefault(): Promise<void> {
+    if (!this.terminalService || !this.terminalContainer) {
+      return;
+    }
+
+    const snapshot = await this.restoreStore?.loadSnapshot().catch((error) => {
+      errorLog('[TerminalView] Failed to load terminal restore state:', error);
+      return null;
+    });
+    const restoredTabs = snapshot?.tabs ?? [];
+    if (restoredTabs.length === 0) {
+      await this.addTab();
+      return;
+    }
+
+    this.isRestoringTabs = true;
+    try {
+      for (const restoredTab of restoredTabs) {
+        const terminal = await this.addTab({
+          cwd: restoredTab.cwd,
+          customName: restoredTab.customName,
+          agentKind: restoredTab.agentKind,
+          activate: false,
+          persist: false,
+        });
+        if (terminal && restoredTab.agentKind) {
+          this.scheduleRestoredAgentResume(terminal, restoredTab.agentKind);
+        }
+      }
+    } finally {
+      this.isRestoringTabs = false;
+    }
+
+    if (this.tabs.length === 0) {
+      await this.addTab();
+      return;
+    }
+
+    this.activeIndex = -1;
+    this.setActiveTab(Math.min(snapshot?.activeIndex ?? 0, this.tabs.length - 1));
+    await this.persistRestoreStateNow();
+  }
+
   /**
    * 在本 view 内新建一个终端 tab
    */
-  async addTab(): Promise<void> {
-    if (!this.terminalService || !this.terminalContainer) return;
+  async addTab(options: AddTerminalTabOptions = {}): Promise<TerminalInstance | null> {
+    if (!this.terminalService || !this.terminalContainer) return null;
 
     const paneEl = this.terminalContainer.createDiv('termy-pane');
 
     let terminal: TerminalInstance;
     try {
-      terminal = await this.terminalService.createTerminal();
+      terminal = await this.terminalService.createTerminal({
+        cwd: this.resolveRestoredCwd(options.cwd),
+      });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       errorLog('[TerminalView] Create tab failed:', message);
@@ -558,7 +647,7 @@ export class TerminalView extends ItemView {
       if (this.tabs.length === 0) {
         this.detachLeafWithoutConfirmation();
       }
-      return;
+      return null;
     }
 
     // View 可能在等待终端创建（异步）期间被关闭：onClose 已清空 tabs 并清空容器。
@@ -566,7 +655,7 @@ export class TerminalView extends ItemView {
     if (!this.terminalContainer?.isConnected) {
       await this.terminalService?.destroyTerminal(terminal.id).catch(() => { /* ignore */ });
       paneEl.remove();
-      return;
+      return null;
     }
 
     // 首个终端兑现 initPromise（waitForTerminalInstance 依赖）
@@ -581,16 +670,143 @@ export class TerminalView extends ItemView {
     }
     this.registerTerminalHyperlinkHandler(terminal);
 
-    this.tabs.push({ terminal, paneEl, customName: null, status: 'none' });
+    this.tabs.push({
+      terminal,
+      paneEl,
+      customName: normalizeRestoredCustomName(options.customName),
+      status: options.agentKind ?? 'none',
+    });
 
     // Track foreground changes so the tab can show tmux/ssh/Claude/Codex status.
     terminal.onForegroundChange((info) => {
       this.foregroundByTerminal.set(terminal, info);
       this.updateTabForegroundStatus(terminal, info);
+      this.scheduleRestoreStatePersist();
     });
+
+    if (options.activate === false) {
+      this.renderTabBar();
+      this.updateDropHintText();
+      if (options.persist !== false) {
+        this.scheduleRestoreStatePersist();
+      }
+      return terminal;
+    }
 
     this.activeIndex = -1; // Force setActiveTab to bind the new terminal.
     this.setActiveTab(this.tabs.length - 1);
+    if (options.persist !== false) {
+      this.scheduleRestoreStatePersist();
+    }
+    return terminal;
+  }
+
+  private scheduleRestoredAgentResume(terminal: TerminalInstance, agentKind: RestorableAgentKind): void {
+    const command = `${restoredAgentCommand(agentKind)}\r`;
+    window.setTimeout(() => {
+      if (!this.tabs.some((tab) => tab.terminal === terminal) || !terminal.isAlive()) {
+        return;
+      }
+      terminal.sendText(command);
+      this.scheduleRestoreStatePersist();
+    }, 600);
+  }
+
+  private resolveRestoredCwd(cwd: string | null | undefined): string | undefined {
+    const restoredCwd = cwd?.trim();
+    if (!restoredCwd) {
+      return undefined;
+    }
+
+    try {
+      return this.fs.existsSync(restoredCwd) && this.fs.statSync(restoredCwd).isDirectory()
+        ? restoredCwd
+        : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  private scheduleRestoreStatePersist(): void {
+    if (this.isRestoringTabs || !this.restoreStore) {
+      return;
+    }
+
+    this.clearRestorePersistTimeout();
+    this.restorePersistTimeout = window.setTimeout(() => {
+      this.restorePersistTimeout = null;
+      void this.persistRestoreStateNow();
+    }, 250);
+  }
+
+  private clearRestorePersistTimeout(): void {
+    if (this.restorePersistTimeout !== null) {
+      window.clearTimeout(this.restorePersistTimeout);
+      this.restorePersistTimeout = null;
+    }
+  }
+
+  private async persistRestoreStateNow(): Promise<void> {
+    if (!this.restoreStore) {
+      return;
+    }
+
+    try {
+      await this.restoreStore.saveSnapshot(this.buildRestoreSnapshot());
+    } catch (error) {
+      errorLog('[TerminalView] Failed to save terminal restore state:', error);
+    }
+  }
+
+  private async clearRestoreState(): Promise<void> {
+    this.clearRestorePersistTimeout();
+    if (!this.restoreStore) {
+      return;
+    }
+
+    try {
+      await this.restoreStore.clearSnapshot();
+    } catch (error) {
+      errorLog('[TerminalView] Failed to clear terminal restore state:', error);
+    }
+  }
+
+  private buildRestoreSnapshot(): TerminalRestoreSnapshot {
+    return {
+      tabs: this.tabs.map((tab) => this.restoredTabFromEntry(tab)),
+      activeIndex: Math.max(0, Math.min(this.activeIndex, Math.max(0, this.tabs.length - 1))),
+      updatedAtMs: Date.now(),
+    };
+  }
+
+  private restoredTabFromEntry(tab: TerminalTabEntry): RestoredTerminalTab {
+    return {
+      customName: tab.customName,
+      cwd: this.safeTerminalCwd(tab.terminal),
+      agentKind: this.resolveRestorableAgentKind(tab),
+      title: tab.terminal.getTitle(),
+      updatedAtMs: Date.now(),
+    };
+  }
+
+  private safeTerminalCwd(terminal: TerminalInstance): string | null {
+    try {
+      return terminal.getCwd();
+    } catch {
+      return null;
+    }
+  }
+
+  private resolveRestorableAgentKind(tab: TerminalTabEntry): RestorableAgentKind | null {
+    if (tab.status === 'claude' || tab.status === 'codex') {
+      return tab.status;
+    }
+    if (tab.terminal.isClaudeCodeSession()) {
+      return 'claude';
+    }
+    const foreground = this.foregroundByTerminal.get(tab.terminal) ?? tab.terminal.getForeground();
+    const status = classifyForeground(foreground);
+    return status === 'claude' || status === 'codex' ? status : null;
   }
 
   private setTerminalTabStatus(terminal: TerminalInstance, status: TerminalTabStatus): void {
@@ -601,6 +817,7 @@ export class TerminalView extends ItemView {
 
     tab.status = status;
     this.renderTabBar();
+    this.scheduleRestoreStatePersist();
   }
 
   private updateTabForegroundStatus(
@@ -662,6 +879,8 @@ export class TerminalView extends ItemView {
       return;
     }
 
+    this.manualViewDetachRequested = true;
+    await this.clearRestoreState();
     this.detachLeafWithoutConfirmation();
   }
 
@@ -716,6 +935,7 @@ export class TerminalView extends ItemView {
     this.renderTabBar();
     this.updateLeafHeader(this.leaf);
     this.updateDropHintText();
+    this.scheduleRestoreStatePersist();
   }
 
   /**
@@ -755,6 +975,7 @@ export class TerminalView extends ItemView {
         // 关闭最后一个 tab 时保留 view，自动重开一个新终端；
         // 若新建失败，addTab 内部会回退为关闭整个 view。
         await this.addTab();
+        this.scheduleRestoreStatePersist();
         return;
       }
 
@@ -767,6 +988,7 @@ export class TerminalView extends ItemView {
       }
       this.activeIndex = -1; // 强制重新绑定
       this.setActiveTab(Math.max(0, next));
+      this.scheduleRestoreStatePersist();
     } finally {
       this.closingTabs.delete(tab.terminal);
     }
@@ -954,6 +1176,7 @@ export class TerminalView extends ItemView {
       const trimmed = newName.trim();
       tab.customName = trimmed || null;
       this.renderTabBar();
+      this.scheduleRestoreStatePersist();
     }).open();
   }
 
@@ -962,6 +1185,7 @@ export class TerminalView extends ItemView {
     this.titleChangeCleanup = terminal.onTitleChange(() => {
       this.updateLeafHeader(this.leaf);
       this.updateDropHintText();
+      this.scheduleRestoreStatePersist();
     });
 
     this.searchStateCleanup = terminal.onSearchStateChange((visible) => {
