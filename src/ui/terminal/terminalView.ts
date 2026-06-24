@@ -586,7 +586,11 @@ export class TerminalView extends ItemView {
 
     this.agentStatusUnsubscribe = this.agentStatusService.subscribe((snapshot) => {
       this.latestAgentSnapshot = snapshot;
+      const rememberedAgentChanged = this.refreshRememberedAgentsFromSnapshot();
       this.renderTabBar();
+      if (rememberedAgentChanged) {
+        this.scheduleRestoreStatePersist();
+      }
     });
   }
 
@@ -916,6 +920,26 @@ export class TerminalView extends ItemView {
     tab.lastKnownAgentKind = kind;
     tab.lastKnownAgentSessionId = sessionId;
     tab.lastKnownAgentProtectedUntilMs = 0;
+  }
+
+  private refreshRememberedAgentsFromSnapshot(): boolean {
+    let changed = false;
+    for (const tab of this.tabs) {
+      const client = this.matchingAgentClientsForTab(tab).find((candidate) =>
+        (candidate.kind === 'claude' || candidate.kind === 'codex') && candidate.agentSessionId);
+      if (!client?.agentSessionId) {
+        continue;
+      }
+
+      if (tab.lastKnownAgentKind !== client.kind || tab.lastKnownAgentSessionId !== client.agentSessionId) {
+        this.rememberAgent(tab, client.kind, client.agentSessionId);
+        if (tab.status === 'none') {
+          tab.status = client.kind;
+        }
+        changed = true;
+      }
+    }
+    return changed;
   }
 
   private markObservedAgentKind(terminal: TerminalInstance, kind: RestorableAgentKind): void {
