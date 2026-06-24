@@ -8,6 +8,7 @@ export interface AgentClient {
   pid: number;
   parentPid: number;
   processGroupId: number;
+  agentSessionId: string | null;
   workspaceId: string | null;
   surfaceId: string | null;
   tty: string | null;

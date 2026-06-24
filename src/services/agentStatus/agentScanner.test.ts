@@ -159,6 +159,7 @@ test('AgentScanner trusts fresh Claude hook running state over stale session fre
   const client = snapshot.clients.find((candidate) => candidate.id === 'claude-201');
   assert.equal(client?.state, 'running');
   assert.equal(client?.detail, 'hook: UserPromptSubmit');
+  assert.equal(client?.agentSessionId, 'claude-session-201');
 });
 
 test('AgentScanner keeps explicit idle Claude sessions from stale running hooks', async () => {
@@ -218,6 +219,7 @@ test('AgentScanner trusts fresh Codex hook waiting state without sqlite log scan
     sessions: {
       'codex:501': {
         agent: 'codex',
+        sessionId: 'codex-session-501',
         pid: 501,
         cwd: '/Users/example/lab/termy',
         state: 'waitingApproval',
@@ -235,6 +237,7 @@ test('AgentScanner trusts fresh Codex hook waiting state without sqlite log scan
   assert.equal(client?.state, 'waitingApproval');
   assert.equal(client?.cwd, '/Users/example/lab/termy');
   assert.equal(client?.detail, 'hook: PermissionRequest');
+  assert.equal(client?.agentSessionId, 'codex-session-501');
 });
 
 test('resolveCodexState keeps attention and active states above idle fallbacks', () => {

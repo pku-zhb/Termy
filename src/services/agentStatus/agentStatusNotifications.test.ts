@@ -39,6 +39,7 @@ test('createAgentStatusNotification names waiting clients for green-to-red', () 
     pid: 501,
     parentPid: 1,
     processGroupId: 501,
+    agentSessionId: 'codex-session-501',
     workspaceId: null,
     surfaceId: null,
     tty: 'ttys001',

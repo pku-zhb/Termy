@@ -20,6 +20,7 @@ test('TerminalRestoreStore saves and loads tabs per local vault', async () => {
     customName: 'Agent',
     cwd: '/Users/example/lab/termy',
     agentKind: 'claude',
+    agentSessionId: 'claude-session-one',
     title: 'Claude Code',
     updatedAtMs: 100,
   }], 0));
@@ -27,6 +28,7 @@ test('TerminalRestoreStore saves and loads tabs per local vault', async () => {
     customName: null,
     cwd: '/Users/example/lab/other',
     agentKind: 'codex',
+    agentSessionId: 'codex-session-two',
     title: 'Codex',
     updatedAtMs: 200,
   }], 0));
@@ -44,6 +46,7 @@ test('TerminalRestoreStore clears only the current vault snapshot', async () => 
     customName: 'Claude',
     cwd: '/tmp/one',
     agentKind: 'claude',
+    agentSessionId: 'claude-session-one',
     title: 'Claude',
     updatedAtMs: 100,
   }], 0));
@@ -51,6 +54,7 @@ test('TerminalRestoreStore clears only the current vault snapshot', async () => 
     customName: 'Codex',
     cwd: '/tmp/two',
     agentKind: 'codex',
+    agentSessionId: 'codex-session-two',
     title: 'Codex',
     updatedAtMs: 100,
   }], 0));
@@ -65,7 +69,7 @@ test('TerminalRestoreStore normalizes malformed files', async () => {
   const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'termy-restore-'));
   const restoreDir = path.join(homeDir, '.termy');
   fs.mkdirSync(restoreDir, { recursive: true });
-  fs.writeFileSync(path.join(restoreDir, 'terminal-restore.json'), '{"vaults":[{"vaultPath":"/vault","activeIndex":99,"tabs":[{"agentKind":"bad"},{"agentKind":"codex","cwd":"/tmp","updatedAtMs":5}]}]}');
+  fs.writeFileSync(path.join(restoreDir, 'terminal-restore.json'), '{"vaults":[{"vaultPath":"/vault","activeIndex":99,"tabs":[{"agentKind":"bad"},{"agentKind":"codex","agentSessionId":"codex-session","cwd":"/tmp","updatedAtMs":5}]}]}');
 
   const restored = await store(homeDir, '/vault').loadSnapshot();
 
@@ -80,11 +84,13 @@ test('restored agent helpers detect and command Claude/Codex tabs', () => {
     customName: null,
     cwd: '/tmp',
     agentKind: 'claude',
+    agentSessionId: 'claude-session',
     title: 'Claude',
     updatedAtMs: 100,
   }], 0)), true);
-  assert.equal(restoredAgentCommand('claude'), 'claude --continue');
-  assert.equal(restoredAgentCommand('codex'), 'codex resume --last');
+  assert.equal(restoredAgentCommand('claude', 'claude-session'), 'claude --resume claude-session');
+  assert.equal(restoredAgentCommand('codex', 'codex-session'), 'codex resume codex-session');
+  assert.equal(restoredAgentCommand('claude', null), null);
 });
 
 function store(homeDir: string, vaultPath: string): TerminalRestoreStore {

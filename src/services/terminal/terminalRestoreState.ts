@@ -8,6 +8,7 @@ export interface RestoredTerminalTab {
   customName: string | null;
   cwd: string | null;
   agentKind: RestorableAgentKind | null;
+  agentSessionId: string | null;
   title: string | null;
   updatedAtMs: number;
 }
@@ -135,13 +136,20 @@ export class TerminalRestoreStore {
 }
 
 export function hasRestorableAgentTabs(snapshot: TerminalRestoreSnapshot): boolean {
-  return snapshot.tabs.some((tab) => tab.agentKind === 'claude' || tab.agentKind === 'codex');
+  return snapshot.tabs.some((tab) =>
+    (tab.agentKind === 'claude' || tab.agentKind === 'codex')
+    && tab.agentSessionId !== null);
 }
 
-export function restoredAgentCommand(agentKind: RestorableAgentKind): string {
+export function restoredAgentCommand(agentKind: RestorableAgentKind, agentSessionId: string | null): string | null {
+  const sessionId = normalizeString(agentSessionId);
+  if (!sessionId) {
+    return null;
+  }
+
   return agentKind === 'claude'
-    ? 'claude --continue'
-    : 'codex resume --last';
+    ? `claude --resume ${shellQuote(sessionId)}`
+    : `codex resume ${shellQuote(sessionId)}`;
 }
 
 function emptyRestoreFile(deviceId: string): RestoreFile {
@@ -223,6 +231,7 @@ function normalizeTab(value: unknown): RestoredTerminalTab | null {
   const customName = normalizeNullableString(value.customName);
   const cwd = normalizeNullableString(value.cwd);
   const agentKind = normalizeAgentKind(value.agentKind);
+  const agentSessionId = normalizeNullableString(value.agentSessionId ?? value.sessionId);
   const title = normalizeNullableString(value.title);
   const updatedAtMs = typeof value.updatedAtMs === 'number' && Number.isFinite(value.updatedAtMs)
     ? value.updatedAtMs
@@ -236,9 +245,17 @@ function normalizeTab(value: unknown): RestoredTerminalTab | null {
     customName,
     cwd,
     agentKind,
+    agentSessionId,
     title,
     updatedAtMs,
   };
+}
+
+function shellQuote(value: string): string {
+  if (/^[A-Za-z0-9._:/@+-]+$/.test(value)) {
+    return value;
+  }
+  return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
 function normalizeIndex(value: unknown, count: number): number {
