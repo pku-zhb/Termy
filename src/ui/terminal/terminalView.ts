@@ -37,6 +37,10 @@ import {
   type TerminalTabStatus,
 } from '../../services/terminal/foregroundStatus';
 import {
+  matchDirectTerminalAgentClients,
+  type DirectTerminalAgentMatchOptions,
+} from '../../services/terminal/terminalAgentMatching';
+import {
   TerminalRestoreStore,
   restoredAgentCommand,
   type RestorableAgentKind,
@@ -143,6 +147,11 @@ interface TerminalTabAgentStatus {
   state: AgentState;
   clients: AgentClient[];
 }
+
+const RESTORE_AGENT_MATCH_OPTIONS: DirectTerminalAgentMatchOptions = {
+  allowRememberedSession: false,
+  allowSingleLocalFallback: false,
+};
 
 function isIdleShellForeground(info: ForegroundInfo): boolean {
   if (classifyForeground(info) !== 'none') {
@@ -867,7 +876,7 @@ export class TerminalView extends ItemView {
   }
 
   private resolveRestorableAgentKind(tab: TerminalTabEntry): RestorableAgentKind | null {
-    const matchedClient = this.matchingAgentClientsForTab(tab).find((client) =>
+    const matchedClient = this.matchingAgentClientsForTab(tab, RESTORE_AGENT_MATCH_OPTIONS).find((client) =>
       client.kind === 'claude' || client.kind === 'codex');
     if (matchedClient) {
       this.rememberAgentClient(tab, matchedClient);
@@ -894,7 +903,7 @@ export class TerminalView extends ItemView {
   }
 
   private resolveRestorableAgentSessionId(tab: TerminalTabEntry): string | null {
-    const matchedClient = this.matchingAgentClientsForTab(tab).find((client) =>
+    const matchedClient = this.matchingAgentClientsForTab(tab, RESTORE_AGENT_MATCH_OPTIONS).find((client) =>
       client.agentSessionId !== null);
     if (matchedClient?.agentSessionId) {
       this.rememberAgentClient(tab, matchedClient);
@@ -905,7 +914,7 @@ export class TerminalView extends ItemView {
       this.rememberAgent(tab, hookAgent.kind, hookAgent.sessionId);
       return hookAgent.sessionId;
     }
-    return this.preservedLastKnownAgent(tab)?.sessionId ?? null;
+    return null;
   }
 
   private rememberAgentClient(tab: TerminalTabEntry, client: AgentClient): void {
@@ -925,7 +934,7 @@ export class TerminalView extends ItemView {
   private refreshRememberedAgentsFromSnapshot(): boolean {
     let changed = false;
     for (const tab of this.tabs) {
-      const client = this.matchingAgentClientsForTab(tab).find((candidate) =>
+      const client = this.matchingAgentClientsForTab(tab, RESTORE_AGENT_MATCH_OPTIONS).find((candidate) =>
         (candidate.kind === 'claude' || candidate.kind === 'codex') && candidate.agentSessionId);
       if (!client?.agentSessionId) {
         continue;
@@ -1328,7 +1337,10 @@ export class TerminalView extends ItemView {
     return aggregateTabAgentStatus(this.matchingAgentClientsForTab(tab));
   }
 
-  private matchingAgentClientsForTab(tab: TerminalTabEntry): AgentClient[] {
+  private matchingAgentClientsForTab(
+    tab: TerminalTabEntry,
+    options: DirectTerminalAgentMatchOptions = {},
+  ): AgentClient[] {
     const snapshot = this.latestAgentSnapshot;
     if (!snapshot || snapshot.clients.length === 0) {
       return [];
@@ -1336,15 +1348,6 @@ export class TerminalView extends ItemView {
 
     const info = this.foregroundByTerminal.get(tab.terminal) ?? tab.terminal.getForeground();
     const clients = snapshot.clients;
-    const lastKnownSessionId = normalizeRestoredAgentSessionId(tab.lastKnownAgentSessionId);
-    if (lastKnownSessionId) {
-      const sessionMatches = clients.filter((client) =>
-        client.agentSessionId === lastKnownSessionId
-        && (!tab.lastKnownAgentKind || client.kind === tab.lastKnownAgentKind));
-      if (sessionMatches.length > 0) {
-        return sessionMatches;
-      }
-    }
 
     if (tab.status === 'tmux') {
       const sessionName = resolveTmuxSessionName(snapshot, info);
@@ -1354,24 +1357,13 @@ export class TerminalView extends ItemView {
       return clients.filter((client) => client.surfaceId === `tmux:${sessionName}`);
     }
 
-    if (tab.status === 'claude' || tab.status === 'codex') {
-      const kindClients = clients.filter((client) => client.kind === tab.status);
-      const pid = info?.pid ?? null;
-      if (pid) {
-        const pidMatches = kindClients.filter((client) =>
-          client.pid === pid
-          || client.parentPid === pid
-          || client.processGroupId === pid);
-        if (pidMatches.length > 0) {
-          return pidMatches;
-        }
-      }
-
-      const localClients = kindClients.filter((client) => !client.surfaceId);
-      return localClients.length === 1 ? localClients : [];
-    }
-
-    return [];
+    return matchDirectTerminalAgentClients({
+      status: tab.status,
+      foreground: info,
+      clients,
+      lastKnownAgentKind: tab.lastKnownAgentKind,
+      lastKnownAgentSessionId: tab.lastKnownAgentSessionId,
+    }, options);
   }
 
   private appendTabStatusIcon(parent: HTMLElement, status: 'tmux' | AgentKind): void {
