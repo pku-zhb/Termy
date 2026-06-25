@@ -5,6 +5,18 @@ All notable changes to Termy will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.4] - 2026-06-25
+
+### Added
+- Added local agent tab auto-restore for Claude Code and Codex tabs, including delayed resume after the terminal becomes ready.
+- Added macOS notifications for local agent status changes.
+
+### Fixed
+- Fixed restored Codex tabs reusing stale session metadata across multiple terminal tabs.
+- Fixed Codex restore commands to pass the saved workspace with `--cd`, so resumed sessions start in the original working directory.
+- Fixed long Chinese IME and voice-input preedit text so it wraps within the terminal instead of pushing the viewport horizontally.
+- Made the IME preedit overlay transparent so it no longer covers previously typed terminal content.
+
 ## [1.5.3] - 2026-06-18
 
 ### Added
