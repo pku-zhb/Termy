@@ -90,6 +90,10 @@ test('restored agent helpers detect and command Claude/Codex tabs', () => {
   }], 0)), true);
   assert.equal(restoredAgentCommand('claude', 'claude-session'), 'claude --resume claude-session');
   assert.equal(restoredAgentCommand('codex', 'codex-session'), 'codex resume codex-session');
+  assert.equal(
+    restoredAgentCommand('codex', 'codex-session', '/Users/example/My Project'),
+    "codex resume --cd '/Users/example/My Project' codex-session",
+  );
   assert.equal(restoredAgentCommand('claude', null), null);
 });
 

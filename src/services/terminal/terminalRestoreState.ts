@@ -141,15 +141,23 @@ export function hasRestorableAgentTabs(snapshot: TerminalRestoreSnapshot): boole
     && tab.agentSessionId !== null);
 }
 
-export function restoredAgentCommand(agentKind: RestorableAgentKind, agentSessionId: string | null): string | null {
+export function restoredAgentCommand(
+  agentKind: RestorableAgentKind,
+  agentSessionId: string | null,
+  cwd?: string | null,
+): string | null {
   const sessionId = normalizeString(agentSessionId);
   if (!sessionId) {
     return null;
   }
 
-  return agentKind === 'claude'
-    ? `claude --resume ${shellQuote(sessionId)}`
-    : `codex resume ${shellQuote(sessionId)}`;
+  if (agentKind === 'claude') {
+    return `claude --resume ${shellQuote(sessionId)}`;
+  }
+
+  const restoredCwd = normalizeString(cwd);
+  const cwdArgs = restoredCwd ? ` --cd ${shellQuote(restoredCwd)}` : '';
+  return `codex resume${cwdArgs} ${shellQuote(sessionId)}`;
 }
 
 function emptyRestoreFile(deviceId: string): RestoreFile {

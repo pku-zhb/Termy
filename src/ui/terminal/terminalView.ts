@@ -148,6 +148,12 @@ interface TerminalTabAgentStatus {
   clients: AgentClient[];
 }
 
+interface RestorableAgentSnapshot {
+  kind: RestorableAgentKind | null;
+  sessionId: string | null;
+  cwd: string | null;
+}
+
 const RESTORE_AGENT_MATCH_OPTIONS: DirectTerminalAgentMatchOptions = {
   allowRememberedSession: false,
   allowSingleLocalFallback: false,
@@ -745,7 +751,11 @@ export class TerminalView extends ItemView {
       return;
     }
 
-    const command = restoredAgentCommand(restoredTab.agentKind, restoredTab.agentSessionId);
+    const command = restoredAgentCommand(
+      restoredTab.agentKind,
+      restoredTab.agentSessionId,
+      this.resolveRestoredCwd(restoredTab.cwd),
+    );
     if (!command) {
       return;
     }
@@ -857,11 +867,12 @@ export class TerminalView extends ItemView {
   }
 
   private restoredTabFromEntry(tab: TerminalTabEntry): RestoredTerminalTab {
+    const agent = this.resolveRestorableAgentSnapshot(tab);
     return {
       customName: tab.customName,
-      cwd: this.safeTerminalCwd(tab.terminal),
-      agentKind: this.resolveRestorableAgentKind(tab),
-      agentSessionId: this.resolveRestorableAgentSessionId(tab),
+      cwd: agent.cwd ?? this.safeTerminalCwd(tab.terminal),
+      agentKind: agent.kind,
+      agentSessionId: agent.sessionId,
       title: tab.terminal.getTitle(),
       updatedAtMs: Date.now(),
     };
@@ -875,46 +886,37 @@ export class TerminalView extends ItemView {
     }
   }
 
-  private resolveRestorableAgentKind(tab: TerminalTabEntry): RestorableAgentKind | null {
+  private resolveRestorableAgentSnapshot(tab: TerminalTabEntry): RestorableAgentSnapshot {
     const matchedClient = this.matchingAgentClientsForTab(tab, RESTORE_AGENT_MATCH_OPTIONS).find((client) =>
       client.kind === 'claude' || client.kind === 'codex');
     if (matchedClient) {
       this.rememberAgentClient(tab, matchedClient);
-      return matchedClient.kind;
+      return {
+        kind: matchedClient.kind,
+        sessionId: matchedClient.agentSessionId,
+        cwd: matchedClient.cwd,
+      };
     }
     const hookAgent = this.claudeHookAgentForTab(tab);
     if (hookAgent) {
       this.rememberAgent(tab, hookAgent.kind, hookAgent.sessionId);
-      return hookAgent.kind;
+      return hookAgent;
     }
     const lastKnownAgent = this.preservedLastKnownAgent(tab);
     if (lastKnownAgent) {
-      return lastKnownAgent.kind;
+      return { kind: lastKnownAgent.kind, sessionId: null, cwd: null };
     }
     if (tab.status === 'claude' || tab.status === 'codex') {
-      return tab.status;
+      return { kind: tab.status, sessionId: null, cwd: null };
     }
     if (tab.terminal.isClaudeCodeSession()) {
-      return 'claude';
+      return { kind: 'claude', sessionId: null, cwd: null };
     }
     const foreground = this.foregroundByTerminal.get(tab.terminal) ?? tab.terminal.getForeground();
     const status = classifyForeground(foreground);
-    return status === 'claude' || status === 'codex' ? status : null;
-  }
-
-  private resolveRestorableAgentSessionId(tab: TerminalTabEntry): string | null {
-    const matchedClient = this.matchingAgentClientsForTab(tab, RESTORE_AGENT_MATCH_OPTIONS).find((client) =>
-      client.agentSessionId !== null);
-    if (matchedClient?.agentSessionId) {
-      this.rememberAgentClient(tab, matchedClient);
-      return matchedClient.agentSessionId;
-    }
-    const hookAgent = this.claudeHookAgentForTab(tab);
-    if (hookAgent) {
-      this.rememberAgent(tab, hookAgent.kind, hookAgent.sessionId);
-      return hookAgent.sessionId;
-    }
-    return null;
+    return status === 'claude' || status === 'codex'
+      ? { kind: status, sessionId: null, cwd: null }
+      : { kind: null, sessionId: null, cwd: null };
   }
 
   private rememberAgentClient(tab: TerminalTabEntry, client: AgentClient): void {
@@ -988,7 +990,7 @@ export class TerminalView extends ItemView {
       : null;
   }
 
-  private claudeHookAgentForTab(tab: TerminalTabEntry): { kind: 'claude'; sessionId: string } | null {
+  private claudeHookAgentForTab(tab: TerminalTabEntry): { kind: 'claude'; sessionId: string; cwd: string } | null {
     if (!this.shouldUseClaudeHookFallback(tab)) {
       return null;
     }
@@ -1009,7 +1011,7 @@ export class TerminalView extends ItemView {
         && now - session.updatedAtMs <= CLAUDE_HOOK_SESSION_LOOKBACK_MS)
       .sort((left, right) => (right.updatedAtMs ?? 0) - (left.updatedAtMs ?? 0))[0];
 
-    return match?.sessionId ? { kind: 'claude', sessionId: match.sessionId } : null;
+    return match?.sessionId ? { kind: 'claude', sessionId: match.sessionId, cwd } : null;
   }
 
   private shouldUseClaudeHookFallback(tab: TerminalTabEntry): boolean {

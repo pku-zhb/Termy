@@ -1554,8 +1554,8 @@
   word-break: break-word;
   overflow: hidden;
   pointer-events: none;
-  background-color: var(--terminal-bg-color, var(--background-primary, #1e1e1e));
   color: var(--terminal-fg-color, var(--text-normal, #cccccc));
+  opacity: 0.82;
   text-decoration: underline;
   text-underline-offset: 2px;
 }
