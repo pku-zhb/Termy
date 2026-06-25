@@ -16,6 +16,7 @@ import {
   isImeCommitFallbackText,
   shouldScheduleImeCommitFallbackForBeforeInput,
 } from './imeCommitFallback';
+import { computeImeCompositionViewBounds } from './imeCompositionView';
 import {
   matchKeybinding,
   DEFAULT_KEYBINDING_RULES,
@@ -60,6 +61,11 @@ type IDisposable = import('@xterm/xterm').IDisposable;
 
 const IME_COMMIT_FALLBACK_DELAY_MS = 16;
 const IME_COMMIT_RECENT_DATA_WINDOW_MS = 32;
+
+function parsePixelValue(value: string): number {
+  const parsed = Number.parseFloat(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
 
 const XTERM_BACKGROUND_LAYER_SELECTOR = [
   '.xterm',
@@ -1194,6 +1200,14 @@ export class TerminalInstance {
     if (!textarea) {
       return;
     }
+    const compositionView = container.querySelector<HTMLElement>('.composition-view');
+    const screen = container.querySelector<HTMLElement>('.xterm-screen');
+    const syncCompositionViewBounds = (): void => {
+      if (!compositionView || !screen) {
+        return;
+      }
+      this.scheduleImeCompositionViewBoundsSync(compositionView, screen);
+    };
 
     this.isComposing = false;
 
@@ -1203,16 +1217,66 @@ export class TerminalInstance {
     // 认 compositionend 一次。
     this.addDomEventListener(textarea, 'compositionstart', () => {
       this.isComposing = true;
+      syncCompositionViewBounds();
+    });
+    this.addDomEventListener(textarea, 'compositionupdate', () => {
+      syncCompositionViewBounds();
     });
     this.addDomEventListener(textarea, 'compositionend', (event: CompositionEvent) => {
       this.isComposing = false;
+      if (compositionView) {
+        this.resetImeCompositionViewBounds(compositionView);
+      }
       this.scheduleImeCommitFallback(event.data);
     });
     this.addDomEventListener(textarea, 'beforeinput', (event: InputEvent) => {
+      if (this.isComposing) {
+        syncCompositionViewBounds();
+      }
       if (shouldScheduleImeCommitFallbackForBeforeInput(event, this.isComposing)) {
         this.scheduleImeCommitFallback(event.data);
       }
     });
+  }
+
+  private scheduleImeCompositionViewBoundsSync(
+    compositionView: HTMLElement,
+    screen: HTMLElement,
+  ): void {
+    this.syncImeCompositionViewBounds(compositionView, screen);
+
+    const hostWindow = compositionView.ownerDocument.defaultView ?? window;
+    hostWindow.requestAnimationFrame(() => {
+      this.syncImeCompositionViewBounds(compositionView, screen);
+    });
+    hostWindow.setTimeout(() => {
+      this.syncImeCompositionViewBounds(compositionView, screen);
+    }, 0);
+  }
+
+  private syncImeCompositionViewBounds(compositionView: HTMLElement, screen: HTMLElement): void {
+    if (this.isDestroyed || !compositionView.classList.contains('active')) {
+      return;
+    }
+
+    const cellHeight = parsePixelValue(compositionView.style.lineHeight)
+      || parsePixelValue(compositionView.style.height)
+      || 1;
+    const bounds = computeImeCompositionViewBounds({
+      screenWidth: screen.clientWidth,
+      screenHeight: screen.clientHeight,
+      cursorLeft: parsePixelValue(compositionView.style.left) || compositionView.offsetLeft,
+      cursorTop: parsePixelValue(compositionView.style.top) || compositionView.offsetTop,
+      cellHeight,
+    });
+
+    compositionView.style.maxWidth = `${bounds.maxWidth}px`;
+    compositionView.style.maxHeight = `${bounds.maxHeight}px`;
+  }
+
+  private resetImeCompositionViewBounds(compositionView: HTMLElement): void {
+    compositionView.style.removeProperty('max-width');
+    compositionView.style.removeProperty('max-height');
   }
 
   private setupKeyboardShortcuts(container: HTMLElement): void {
