@@ -1522,31 +1522,48 @@
   border: 0;
   outline: none;
 }
-/* IME 合成预览浮层：拼音/语音输入法正在输入、尚未确认的文本（preedit）。
-   xterm 用 inline 样式把它定位到光标处，所以必须 position:absolute；上游 xterm.css
-   的这条规则没有进 Obsidian 实际加载的 styles.css，故在此显式补全，否则预览不可见。
-   做成「同色字 + 下划线」（像原生终端的 preedit）：字色取终端前景色、背景取终端
-   背景色把下方光标处字符遮住（浮层是盖在 canvas 上、不像原生那样 inline 推开文字，
-   背景透明会与下层字符重叠糊掉），再用下划线标识这是未确认文本。 */
+/* Keep xterm's native composition view as a tiny measurement shim only. Termy
+   renders the visible preedit text in .termy-ime-composition-view below; letting
+   xterm's nowrap view render long voice input can expand the screen horizontally. */
 .composition-view {
   display: none;
   position: absolute;
   z-index: 1;
   box-sizing: border-box;
-  max-width: calc(100% - 4px);
+  width: 1px !important;
+  max-width: 1px !important;
+  min-height: 0;
+  height: 1px !important;
+  line-height: 1px !important;
+  white-space: nowrap;
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+}
+.composition-view.active {
+  display: block;
+}
+.termy-ime-composition-view {
+  display: none;
+  position: absolute;
+  z-index: 8;
+  box-sizing: border-box;
   min-height: 1em;
-  height: auto !important;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   word-break: break-word;
   overflow: hidden;
+  pointer-events: none;
   background-color: var(--terminal-bg-color, var(--background-primary, #1e1e1e));
   color: var(--terminal-fg-color, var(--text-normal, #cccccc));
   text-decoration: underline;
   text-underline-offset: 2px;
 }
-.composition-view.active {
+.termy-ime-composition-view.active {
   display: block;
+}
+.xterm.is-ime-composing .xterm-cursor {
+  opacity: 0;
 }
 /* Xterm screen */
 .xterm-screen {

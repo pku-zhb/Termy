@@ -16,7 +16,7 @@ import {
   isImeCommitFallbackText,
   shouldScheduleImeCommitFallbackForBeforeInput,
 } from './imeCommitFallback';
-import { computeImeCompositionViewBounds } from './imeCompositionView';
+import { computeImeCompositionViewLayout } from './imeCompositionView';
 import {
   matchKeybinding,
   DEFAULT_KEYBINDING_RULES,
@@ -1200,13 +1200,13 @@ export class TerminalInstance {
     if (!textarea) {
       return;
     }
-    const compositionView = container.querySelector<HTMLElement>('.composition-view');
     const screen = container.querySelector<HTMLElement>('.xterm-screen');
-    const syncCompositionViewBounds = (): void => {
-      if (!compositionView || !screen) {
+    const compositionOverlay = screen ? this.ensureImeCompositionOverlay(screen) : null;
+    const syncCompositionOverlay = (text?: string | null): void => {
+      if (!compositionOverlay || !screen) {
         return;
       }
-      this.scheduleImeCompositionViewBoundsSync(compositionView, textarea, screen);
+      this.scheduleImeCompositionOverlaySync(compositionOverlay, textarea, screen, text);
     };
 
     this.isComposing = false;
@@ -1217,21 +1217,28 @@ export class TerminalInstance {
     // 认 compositionend 一次。
     this.addDomEventListener(textarea, 'compositionstart', () => {
       this.isComposing = true;
-      syncCompositionViewBounds();
+      this.setImeComposingClass(container, true);
+      if (compositionOverlay) {
+        compositionOverlay.textContent = '';
+        compositionOverlay.classList.add('active');
+      }
+      syncCompositionOverlay();
     });
-    this.addDomEventListener(textarea, 'compositionupdate', () => {
-      syncCompositionViewBounds();
+    this.addDomEventListener(textarea, 'compositionupdate', (event: CompositionEvent) => {
+      syncCompositionOverlay(event.data);
     });
     this.addDomEventListener(textarea, 'compositionend', (event: CompositionEvent) => {
       this.isComposing = false;
-      if (compositionView) {
-        this.resetImeCompositionViewBounds(compositionView);
+      this.setImeComposingClass(container, false);
+      if (compositionOverlay) {
+        this.hideImeCompositionOverlay(compositionOverlay);
       }
       this.scheduleImeCommitFallback(event.data);
     });
     this.addDomEventListener(textarea, 'beforeinput', (event: InputEvent) => {
       if (this.isComposing) {
-        syncCompositionViewBounds();
+        const text = event.inputType === 'insertCompositionText' ? event.data : undefined;
+        syncCompositionOverlay(text);
       }
       if (shouldScheduleImeCommitFallbackForBeforeInput(event, this.isComposing)) {
         this.scheduleImeCommitFallback(event.data);
@@ -1239,57 +1246,94 @@ export class TerminalInstance {
     });
   }
 
-  private scheduleImeCompositionViewBoundsSync(
-    compositionView: HTMLElement,
+  private ensureImeCompositionOverlay(screen: HTMLElement): HTMLElement {
+    const existing = screen.querySelector<HTMLElement>(':scope > .termy-ime-composition-view');
+    if (existing) {
+      return existing;
+    }
+
+    const overlay = screen.ownerDocument.createElement('div');
+    overlay.className = 'termy-ime-composition-view';
+    screen.appendChild(overlay);
+    return overlay;
+  }
+
+  private setImeComposingClass(container: HTMLElement, active: boolean): void {
+    container.querySelector<HTMLElement>('.xterm')?.classList.toggle('is-ime-composing', active);
+  }
+
+  private scheduleImeCompositionOverlaySync(
+    overlay: HTMLElement,
     textarea: HTMLTextAreaElement,
     screen: HTMLElement,
+    text?: string | null,
   ): void {
-    this.syncImeCompositionViewBounds(compositionView, textarea, screen);
+    this.syncImeCompositionOverlay(overlay, textarea, screen, text);
 
-    const hostWindow = compositionView.ownerDocument.defaultView ?? window;
+    const hostWindow = overlay.ownerDocument.defaultView ?? window;
     hostWindow.requestAnimationFrame(() => {
-      this.syncImeCompositionViewBounds(compositionView, textarea, screen);
+      this.syncImeCompositionOverlay(overlay, textarea, screen);
     });
     hostWindow.setTimeout(() => {
-      this.syncImeCompositionViewBounds(compositionView, textarea, screen);
+      this.syncImeCompositionOverlay(overlay, textarea, screen);
     }, 0);
   }
 
-  private syncImeCompositionViewBounds(
-    compositionView: HTMLElement,
+  private syncImeCompositionOverlay(
+    overlay: HTMLElement,
     textarea: HTMLTextAreaElement,
     screen: HTMLElement,
+    text?: string | null,
   ): void {
-    if (this.isDestroyed || !compositionView.classList.contains('active')) {
+    if (this.isDestroyed || !this.isComposing) {
       return;
     }
 
-    const cellHeight = parsePixelValue(compositionView.style.lineHeight)
-      || parsePixelValue(compositionView.style.height)
-      || 1;
-    const bounds = computeImeCompositionViewBounds({
+    if (text !== undefined && text !== null) {
+      overlay.textContent = text;
+    }
+    overlay.classList.toggle('active', !!overlay.textContent);
+
+    const cellHeight = this.getImeCompositionCellHeight(screen);
+    const cursorLeft = parsePixelValue(textarea.style.left);
+    const cursorTop = parsePixelValue(textarea.style.top);
+    overlay.style.lineHeight = `${cellHeight}px`;
+    overlay.style.fontFamily = String(this.xterm.options.fontFamily ?? '');
+    overlay.style.fontSize = `${this.xterm.options.fontSize ?? this.currentFontSize}px`;
+
+    const measuredHeight = Math.max(cellHeight, overlay.scrollHeight || overlay.offsetHeight || cellHeight);
+    const layout = computeImeCompositionViewLayout({
       screenWidth: screen.clientWidth,
       screenHeight: screen.clientHeight,
-      cursorLeft: parsePixelValue(textarea.style.left)
-        || parsePixelValue(compositionView.style.left)
-        || compositionView.offsetLeft,
-      cursorTop: parsePixelValue(compositionView.style.top) || compositionView.offsetTop,
+      cursorLeft,
+      cursorTop,
       cellHeight,
+      contentHeight: measuredHeight,
     });
 
-    compositionView.style.left = `${bounds.left}px`;
-    compositionView.style.width = `${bounds.width}px`;
-    compositionView.style.maxWidth = `${bounds.width}px`;
-    compositionView.style.maxHeight = `${bounds.maxHeight}px`;
-    compositionView.style.textIndent = `${bounds.textIndent}px`;
+    overlay.style.left = `${layout.left}px`;
+    overlay.style.top = `${layout.top}px`;
+    overlay.style.width = `${layout.width}px`;
+    overlay.style.maxWidth = `${layout.width}px`;
+    overlay.style.maxHeight = `${layout.maxHeight}px`;
+    overlay.style.textIndent = `${layout.textIndent}px`;
+    overlay.scrollTop = overlay.scrollHeight;
   }
 
-  private resetImeCompositionViewBounds(compositionView: HTMLElement): void {
-    compositionView.style.removeProperty('left');
-    compositionView.style.removeProperty('width');
-    compositionView.style.removeProperty('max-width');
-    compositionView.style.removeProperty('max-height');
-    compositionView.style.removeProperty('text-indent');
+  private hideImeCompositionOverlay(overlay: HTMLElement): void {
+    overlay.classList.remove('active');
+    overlay.textContent = '';
+    overlay.removeAttribute('style');
+  }
+
+  private getImeCompositionCellHeight(screen: HTMLElement): number {
+    const renderDims = (this.xterm as unknown as {
+      _core?: { _renderService?: { dimensions?: { css?: { cell?: { height?: number } } } } };
+    })._core?._renderService?.dimensions?.css?.cell;
+    return renderDims?.height
+      || (this.xterm.rows > 0 ? screen.clientHeight / this.xterm.rows : 0)
+      || parsePixelValue(this.xterm.element?.querySelector<HTMLElement>('.xterm-helper-textarea')?.style.lineHeight ?? '')
+      || 1;
   }
 
   private setupKeyboardShortcuts(container: HTMLElement): void {
