@@ -1206,7 +1206,7 @@ export class TerminalInstance {
       if (!compositionView || !screen) {
         return;
       }
-      this.scheduleImeCompositionViewBoundsSync(compositionView, screen);
+      this.scheduleImeCompositionViewBoundsSync(compositionView, textarea, screen);
     };
 
     this.isComposing = false;
@@ -1241,20 +1241,25 @@ export class TerminalInstance {
 
   private scheduleImeCompositionViewBoundsSync(
     compositionView: HTMLElement,
+    textarea: HTMLTextAreaElement,
     screen: HTMLElement,
   ): void {
-    this.syncImeCompositionViewBounds(compositionView, screen);
+    this.syncImeCompositionViewBounds(compositionView, textarea, screen);
 
     const hostWindow = compositionView.ownerDocument.defaultView ?? window;
     hostWindow.requestAnimationFrame(() => {
-      this.syncImeCompositionViewBounds(compositionView, screen);
+      this.syncImeCompositionViewBounds(compositionView, textarea, screen);
     });
     hostWindow.setTimeout(() => {
-      this.syncImeCompositionViewBounds(compositionView, screen);
+      this.syncImeCompositionViewBounds(compositionView, textarea, screen);
     }, 0);
   }
 
-  private syncImeCompositionViewBounds(compositionView: HTMLElement, screen: HTMLElement): void {
+  private syncImeCompositionViewBounds(
+    compositionView: HTMLElement,
+    textarea: HTMLTextAreaElement,
+    screen: HTMLElement,
+  ): void {
     if (this.isDestroyed || !compositionView.classList.contains('active')) {
       return;
     }
@@ -1265,18 +1270,26 @@ export class TerminalInstance {
     const bounds = computeImeCompositionViewBounds({
       screenWidth: screen.clientWidth,
       screenHeight: screen.clientHeight,
-      cursorLeft: parsePixelValue(compositionView.style.left) || compositionView.offsetLeft,
+      cursorLeft: parsePixelValue(textarea.style.left)
+        || parsePixelValue(compositionView.style.left)
+        || compositionView.offsetLeft,
       cursorTop: parsePixelValue(compositionView.style.top) || compositionView.offsetTop,
       cellHeight,
     });
 
-    compositionView.style.maxWidth = `${bounds.maxWidth}px`;
+    compositionView.style.left = `${bounds.left}px`;
+    compositionView.style.width = `${bounds.width}px`;
+    compositionView.style.maxWidth = `${bounds.width}px`;
     compositionView.style.maxHeight = `${bounds.maxHeight}px`;
+    compositionView.style.textIndent = `${bounds.textIndent}px`;
   }
 
   private resetImeCompositionViewBounds(compositionView: HTMLElement): void {
+    compositionView.style.removeProperty('left');
+    compositionView.style.removeProperty('width');
     compositionView.style.removeProperty('max-width');
     compositionView.style.removeProperty('max-height');
+    compositionView.style.removeProperty('text-indent');
   }
 
   private setupKeyboardShortcuts(container: HTMLElement): void {

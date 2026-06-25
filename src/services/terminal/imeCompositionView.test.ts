@@ -3,7 +3,7 @@ import test from 'node:test';
 
 import { computeImeCompositionViewBounds } from './imeCompositionView.ts';
 
-test('computeImeCompositionViewBounds clamps width to the remaining cursor row', () => {
+test('computeImeCompositionViewBounds uses full terminal width with first-line cursor indent', () => {
   assert.deepEqual(
     computeImeCompositionViewBounds({
       screenWidth: 800,
@@ -15,14 +15,16 @@ test('computeImeCompositionViewBounds clamps width to the remaining cursor row',
       maxRows: 6,
     }),
     {
-      maxWidth: 236,
+      width: 796,
+      left: 0,
+      textIndent: 560,
       maxHeight: 120,
     },
   );
 });
 
-test('computeImeCompositionViewBounds keeps a visible one-pixel width at the right edge', () => {
-  assert.equal(
+test('computeImeCompositionViewBounds keeps later wrapped lines full width near the right edge', () => {
+  assert.deepEqual(
     computeImeCompositionViewBounds({
       screenWidth: 800,
       screenHeight: 400,
@@ -30,8 +32,13 @@ test('computeImeCompositionViewBounds keeps a visible one-pixel width at the rig
       cursorTop: 120,
       cellHeight: 20,
       padding: 4,
-    }).maxWidth,
-    1,
+    }),
+    {
+      width: 796,
+      left: 0,
+      textIndent: 795,
+      maxHeight: 120,
+    },
   );
 });
 
