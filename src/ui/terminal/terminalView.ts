@@ -70,6 +70,9 @@ import {
   terminalFileUriLooksOpenAtEnd,
 } from '../../services/terminal/terminalFileLinks';
 import {
+  parseTerminalVaultPathLinks,
+} from '../../services/terminal/terminalVaultPathLinks';
+import {
   parseTerminalWebLinks,
   terminalWebUrlLooksLikeContinuation,
   terminalWebUrlLooksOpenAtEnd,
@@ -121,7 +124,9 @@ interface ParsedTerminalHyperlink {
   uri: string;
   startIndex: number;
   endIndex: number;
-  kind: 'file' | 'web';
+  kind: 'file' | 'web' | 'vaultpath';
+  absolutePath?: string;
+  line?: number;
 }
 
 interface TerminalTabEntry {
@@ -1929,6 +1934,23 @@ export class TerminalView extends ItemView {
     terminal.focus();
   }
 
+  // Resolve a bare cited path (absolute, $HOME-relative, or vault-relative) to the
+  // absolute path of a real vault file, or null. Gated to vault files so arbitrary
+  // paths in ordinary terminal output (ls, build logs) are not underlined. In-memory
+  // only (no disk stat) since this runs in the hot xterm link-provider path.
+  private resolveTerminalVaultPathCandidate(candidate: string): string | null {
+    const absolute = isAbsoluteTerminalPath(candidate)
+      ? toPlatformPath(candidate)
+      // Codex's markdown renderer drops the `/Users/<user>/` prefix, leaving a
+      // $HOME-relative path; rejoin it before checking the vault.
+      : joinTerminalPaths(this.homeDir, candidate);
+    if (this.absolutePathToVaultFile(absolute)) {
+      return absolute;
+    }
+    // Vault-root-relative form (e.g. "00 Temp/note.md").
+    return this.resolveVaultPathToAbsolute(candidate);
+  }
+
   private registerTerminalHyperlinkHandler(terminal: TerminalInstance): void {
     this.disposeTerminalLinkProvider(terminal);
     const xterm = terminal.getXterm();
@@ -1954,7 +1976,7 @@ export class TerminalView extends ItemView {
           return;
         }
 
-        const parsedLinks: ParsedTerminalHyperlink[] = [
+        const fileWebLinks: ParsedTerminalHyperlink[] = [
           ...parseTerminalFileUriLinks(window.text).map((link): ParsedTerminalHyperlink => ({
             ...link,
             kind: 'file',
@@ -1964,6 +1986,26 @@ export class TerminalView extends ItemView {
             kind: 'web',
           })),
         ];
+        // Bare vault-file paths (no file:// prefix) printed by agents whose renderer
+        // strips the file URI — e.g. Codex collapsing markdown to a $HOME-relative path.
+        // Drop any that overlap an explicit file://-or-web link to avoid double underline.
+        const vaultPathLinks: ParsedTerminalHyperlink[] = parseTerminalVaultPathLinks(
+          window.text,
+          (candidate) => this.resolveTerminalVaultPathCandidate(candidate),
+        )
+          .filter((link) => !fileWebLinks.some(
+            (existing) => link.startIndex < existing.endIndex && existing.startIndex < link.endIndex,
+          ))
+          .map((link): ParsedTerminalHyperlink => ({
+            uri: link.absolutePath,
+            startIndex: link.startIndex,
+            endIndex: link.endIndex,
+            kind: 'vaultpath',
+            absolutePath: link.absolutePath,
+            line: link.line,
+          }));
+
+        const parsedLinks: ParsedTerminalHyperlink[] = [...fileWebLinks, ...vaultPathLinks];
 
         const links = parsedLinks
           .flatMap((link): XtermLink[] => {
@@ -2001,7 +2043,9 @@ export class TerminalView extends ItemView {
               range,
               activate: (event, text) => {
                 event.preventDefault();
-                if (link.kind === 'file') {
+                if (link.kind === 'vaultpath') {
+                  void this.openTerminalFileReference(link.absolutePath ?? text, link.line);
+                } else if (link.kind === 'file') {
                   void this.openTerminalFileUriLink(text, relativeJunctions);
                 } else {
                   void this.openTerminalHyperlinkTarget(text);
