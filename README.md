@@ -80,6 +80,16 @@ brew install termy-server
 
 升级后端时注意：先 disable 插件、等约 30 秒让旧 server 自动退出，再 enable，否则会重连到内存里的旧进程。
 
+## 简单 Changelog
+
+完整记录见 [CHANGELOG.md](./CHANGELOG.md)。
+
+- **1.5.4 · 2026-06-25**：新增 Claude Code / Codex agent tab 自动恢复和 macOS 状态通知；修复 Codex 恢复目录、跨 tab session 复用，以及长中文 IME/语音输入预编辑显示问题。
+- **1.5.3 · 2026-06-18**：agent 状态识别改为优先读取本机 hook 状态；修复折行 `file://` 链接和多 tab 链接 provider 生命周期问题。
+- **1.5.2 · 2026-06-18**：把 reconnect/session-preservation 工作合回单一 master；断线重连时保留终端 session，并清理过期 PTY server。
+- **1.5.1 · 2026-06-18**：加入 Claude Code / Codex agent monitor、tab 状态图标和 tmux 内嵌 agent 识别。
+- **1.5.0 · 2026-06-10**：加入键盘三分法路由、终端 `file://` 链接、Homebrew 后端卡片、最后一个 tab 自动重生和输入法预编辑修复。
+
 ## 致谢
 
 本项目 fork 自 [ZyphrZero/Termy](https://github.com/ZyphrZero/Termy)——原版的架构（Rust PTY 后端 + xterm.js 前端、workflow 系统、拖拽交互、AI 上下文接力）都是上游的工作，请去给原作者 star。上游完整文档见 [原版 README](https://github.com/ZyphrZero/Termy#readme)。
