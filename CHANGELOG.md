@@ -5,6 +5,12 @@ All notable changes to Termy will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.5] - 2026-06-26
+
+### Added
+- Clickable bare file paths in terminal output: vault-file paths printed without a `file://` prefix — absolute, `$HOME`-relative, or vault-relative, with an optional `:line` suffix — are now linkified and open in Obsidian at the cited line. This covers agents (e.g. Codex) whose renderer collapses a Markdown link into a plain `$HOME`-relative path, which previously was not clickable.
+- Resolution is validated against the in-memory vault index, which both disambiguates space-containing paths and gates linkification to real vault files so arbitrary paths in ordinary terminal output (ls, build logs) are not underlined.
+
 ## [1.5.4] - 2026-06-25
 
 ### Added
