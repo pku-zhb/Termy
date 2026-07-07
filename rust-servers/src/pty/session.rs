@@ -51,6 +51,7 @@ impl PtySession {
         
         // Get the command for the requested shell type
         let mut cmd = super::shell::get_shell_by_type(shell_type);
+        cmd.env_remove("NO_COLOR");
         
         // Add startup arguments
         if let Some(args) = shell_args {
@@ -90,7 +91,7 @@ impl PtySession {
         if let Some(env_vars) = env {
             for (key, value) in env_vars {
                 // Skip environment variables that were already handled
-                if key != "TERM" && !locale_vars.contains(&key.as_str()) {
+                if key != "TERM" && key != "NO_COLOR" && !locale_vars.contains(&key.as_str()) {
                     cmd.env(key, value);
                 }
             }

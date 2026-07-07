@@ -1,7 +1,7 @@
 {
   "id": "termy",
   "name": "Termy",
-  "version": "1.5.5",
+  "version": "1.5.6",
   "minAppVersion": "1.8.7",
   "description": "魔改版 Termy：单标签内多终端 + 内部 tab 切换（Opt 快捷键）。基于 ZyphrZero/Termy 的 fork，与原版共存。",
   "author": "ZyphrZero",

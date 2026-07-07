@@ -372,14 +372,17 @@ export class ServerManager {
 
       // Ensure executable permission (Unix)
       await this.ensureExecutable(binaryPath);
-      
+
+      const serverEnv: NodeJS.ProcessEnv = {
+        ...process.env,
+        TERM: process.env.TERM || 'xterm-256color',
+      };
+      delete serverEnv.NO_COLOR;
+
       // Start the process
       this.process = this.spawn(binaryPath, ['--port', '0', '--parent-pid', String(process.pid)], {
         stdio: ['pipe', 'pipe', 'pipe'],
-        env: {
-          ...process.env,
-          TERM: process.env.TERM || 'xterm-256color',
-        },
+        env: serverEnv,
         windowsHide: true,
         detached: false,
       });

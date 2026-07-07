@@ -6,6 +6,12 @@ export const XTERM_JS_VERSION = '6.0.0';
 export const XTVERSION_RESPONSE = `\x1bP>|xterm.js(${XTERM_JS_VERSION})\x1b\\`;
 export type ClaudeCodeExtendedKeyboardMode = 'none' | 'modifyOtherKeys';
 
+export interface RgbColorLike {
+  r: number;
+  g: number;
+  b: number;
+}
+
 /**
  * Keep the terminal capability hints narrow. Pretending to be VS Code makes
  * Claude Code try to attach to an IDE, which is separate from Termy's PTY.
@@ -20,10 +26,13 @@ export function buildClaudeCodeTuiEnv(
     FORCE_HYPERLINK: parentEnv.FORCE_HYPERLINK || '1',
   };
 
-  return {
+  const merged = {
     ...env,
     ...userEnv,
   };
+  delete merged.NO_COLOR;
+
+  return merged;
 }
 
 export function decodeOsc52Clipboard(data: string): string | null {
@@ -61,6 +70,16 @@ export function decodeTmuxPassthroughOsc52Clipboard(data: string): string | null
   }
 
   return decodeOsc52Clipboard(osc52);
+}
+
+export function formatOscColorResponse(slot: 10 | 11, color: RgbColorLike): string {
+  const component = (value: number): string => {
+    const clamped = Math.max(0, Math.min(255, Math.round(value)));
+    const byte = clamped.toString(16).padStart(2, '0');
+    return `${byte}${byte}`;
+  };
+
+  return `\x1b]${slot};rgb:${component(color.r)}/${component(color.g)}/${component(color.b)}\x1b\\`;
 }
 
 function decodeTmuxPassthrough(data: string): string | null {

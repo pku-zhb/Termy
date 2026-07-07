@@ -31,6 +31,7 @@ import {
   buildClaudeCodeTuiEnv,
   decodeOsc52Clipboard,
   decodeTmuxPassthroughOsc52Clipboard,
+  formatOscColorResponse,
   type ClaudeCodeExtendedKeyboardMode,
   XTVERSION_RESPONSE,
 } from './claudeCodeTuiSupport';
@@ -58,6 +59,20 @@ type CanvasAddon = import('@xterm/addon-canvas').CanvasAddon;
 type WebglAddon = import('@xterm/addon-webgl').WebglAddon;
 type IMarker = import('@xterm/xterm').IMarker;
 type IDisposable = import('@xterm/xterm').IDisposable;
+
+type TerminalTheme = Record<string, string>;
+
+interface RgbColor {
+  r: number;
+  g: number;
+  b: number;
+}
+
+interface HslColor {
+  h: number;
+  s: number;
+  l: number;
+}
 
 const IME_COMMIT_FALLBACK_DELAY_MS = 16;
 const IME_COMMIT_RECENT_DATA_WINDOW_MS = 32;
@@ -323,7 +338,7 @@ export class TerminalInstance {
     }
   }
 
-  private getTheme() {
+  private getTheme(): TerminalTheme {
     const { useObsidianTheme, backgroundColor, foregroundColor } = this.options;
 
     if (useObsidianTheme) {
@@ -332,13 +347,15 @@ export class TerminalInstance {
       const bgFromVar = computed?.getPropertyValue('--background-primary').trim();
       const fgFromVar = computed?.getPropertyValue('--text-normal').trim();
       const cursorFromVar = computed?.getPropertyValue('--text-normal').trim();
-      const selectionFromVar = computed?.getPropertyValue('--text-selection').trim();
+      const background = bgFromVar || (isDark ? '#1e1e1e' : '#ffffff');
+      const foreground = fgFromVar || (isDark ? '#cccccc' : '#333333');
+
       return {
-        background: bgFromVar || (isDark ? '#1e1e1e' : '#ffffff'),
-        foreground: fgFromVar || (isDark ? '#cccccc' : '#333333'),
-        cursor: cursorFromVar || (isDark ? '#ffffff' : '#000000'),
-        cursorAccent: bgFromVar || (isDark ? '#000000' : '#ffffff'),
-        selectionBackground: selectionFromVar || (isDark ? '#264f78' : '#add6ff'),
+        background,
+        foreground,
+        cursor: cursorFromVar || foreground,
+        cursorAccent: background,
+        ...this.buildObsidianAnsiPalette(computed, background, foreground, isDark),
       };
     }
 
@@ -357,11 +374,315 @@ export class TerminalInstance {
   }
 
   private isColorDark(color: string): boolean {
-    const hex = color.replace('#', '');
-    const r = parseInt(hex.substring(0, 2), 16);
-    const g = parseInt(hex.substring(2, 4), 16);
-    const b = parseInt(hex.substring(4, 6), 16);
-    return (r * 299 + g * 587 + b * 114) / 1000 < 128;
+    const rgb = this.colorToRgb(color);
+    if (!rgb) {
+      return true;
+    }
+    return this.relativeLuminance(rgb) < 0.5;
+  }
+
+  private buildObsidianAnsiPalette(
+    computed: CSSStyleDeclaration | undefined,
+    backgroundColor: string,
+    foregroundColor: string,
+    isDark: boolean,
+  ): TerminalTheme {
+    const background = this.colorToRgb(backgroundColor) ?? (isDark ? { r: 30, g: 30, b: 30 } : { r: 255, g: 255, b: 255 });
+    const foreground = this.colorToRgb(foregroundColor) ?? (isDark ? { r: 204, g: 204, b: 204 } : { r: 51, g: 51, b: 51 });
+
+    const primaryColor = this.resolveThemeColor(
+      computed,
+      ['--_primary', '--seed-primary', '--text-accent', '--interactive-accent'],
+      isDark ? '#4cc9f0' : '#0e9aa7',
+    );
+    const primary = this.ensureReadableAccentColor(
+      this.colorToRgb(primaryColor) ?? (isDark ? { r: 76, g: 201, b: 240 } : { r: 14, g: 154, b: 167 }),
+      background,
+      isDark,
+    );
+
+    const secondaryColor = this.resolveThemeColor(
+      computed,
+      ['--_secondary', '--seed-secondary', '--accent-bold', '--accent-highlight'],
+      '',
+    );
+    const secondaryBase = this.colorToRgb(secondaryColor)
+      ?? this.shiftAccentLightness(primary, isDark ? 0.08 : -0.08);
+    const secondary = this.ensureReadableAccentColor(secondaryBase, background, isDark);
+
+    return {
+      black: this.rgbToCss(isDark ? this.mixColors(background, foreground, 0.14) : foreground),
+      red: this.rgbToCss(primary),
+      green: this.rgbToCss(primary),
+      yellow: this.rgbToCss(primary),
+      blue: this.rgbToCss(primary),
+      magenta: this.rgbToCss(primary),
+      cyan: this.rgbToCss(secondary),
+      white: this.rgbToCss(isDark ? this.mixColors(background, foreground, 0.78) : this.mixColors(background, foreground, 0.70)),
+      brightBlack: this.rgbToCss(this.mixColors(background, foreground, isDark ? 0.34 : 0.50)),
+      brightRed: this.rgbToCss(primary),
+      brightGreen: this.rgbToCss(primary),
+      brightYellow: this.rgbToCss(primary),
+      brightBlue: this.rgbToCss(primary),
+      brightMagenta: this.rgbToCss(primary),
+      brightCyan: this.rgbToCss(secondary),
+      brightWhite: this.rgbToCss(foreground),
+      selectionBackground: this.rgbToRgba(primary, isDark ? 0.38 : 0.28),
+      selectionForeground: this.rgbToCss(foreground),
+    };
+  }
+
+  private resolveThemeColor(
+    computed: CSSStyleDeclaration | undefined,
+    variableNames: string[],
+    fallback: string,
+  ): string {
+    for (const variableName of variableNames) {
+      const rawValue = computed?.getPropertyValue(variableName).trim();
+      if (!rawValue) {
+        continue;
+      }
+
+      const resolvedVariable = this.resolveCssColor(`var(${variableName})`);
+      if (resolvedVariable) {
+        return resolvedVariable;
+      }
+
+      const resolvedValue = this.resolveCssColor(rawValue);
+      if (resolvedValue) {
+        return resolvedValue;
+      }
+    }
+
+    return fallback;
+  }
+
+  private resolveCssColor(color: string): string | null {
+    const candidate = color.trim();
+    if (!candidate) {
+      return null;
+    }
+
+    const probe = activeDocument.createElement('span');
+    probe.style.position = 'fixed';
+    probe.style.pointerEvents = 'none';
+    probe.style.visibility = 'hidden';
+    probe.style.color = candidate;
+
+    if (!probe.style.color) {
+      return null;
+    }
+
+    activeDocument.body.appendChild(probe);
+    const resolved = activeDocument.defaultView?.getComputedStyle(probe).color.trim() || null;
+    probe.remove();
+
+    return resolved;
+  }
+
+  private colorToRgb(color: string): RgbColor | null {
+    const resolved = this.resolveCssColor(color) ?? color.trim();
+    return this.parseRgbColor(resolved) ?? this.parseHexColor(resolved) ?? this.parseSrgbColor(resolved);
+  }
+
+  private parseRgbColor(color: string): RgbColor | null {
+    const match = color.match(/^rgba?\((.+)\)$/i);
+    if (!match) {
+      return null;
+    }
+
+    const components = match[1]
+      .replaceAll(',', ' ')
+      .split('/')
+      .shift()
+      ?.trim()
+      .split(/\s+/)
+      .slice(0, 3);
+    if (!components || components.length < 3) {
+      return null;
+    }
+
+    const [r, g, b] = components.map((component) => this.parseRgbComponent(component));
+    if ([r, g, b].some((component) => component === null)) {
+      return null;
+    }
+
+    return { r: r as number, g: g as number, b: b as number };
+  }
+
+  private parseHexColor(color: string): RgbColor | null {
+    const hex = color.trim().replace(/^#/, '');
+    if (!/^[0-9a-f]{3}([0-9a-f]{3})?$/i.test(hex)) {
+      return null;
+    }
+
+    const normalized = hex.length === 3
+      ? hex.split('').map((char) => char + char).join('')
+      : hex;
+
+    return {
+      r: Number.parseInt(normalized.slice(0, 2), 16),
+      g: Number.parseInt(normalized.slice(2, 4), 16),
+      b: Number.parseInt(normalized.slice(4, 6), 16),
+    };
+  }
+
+  private parseSrgbColor(color: string): RgbColor | null {
+    const match = color.match(/^color\(srgb\s+([^\s]+)\s+([^\s]+)\s+([^\s\)]+)/i);
+    if (!match) {
+      return null;
+    }
+
+    const [r, g, b] = match.slice(1, 4).map((component) => {
+      const parsed = Number.parseFloat(component);
+      if (!Number.isFinite(parsed)) {
+        return null;
+      }
+      return this.clampColor(Math.round(parsed * 255));
+    });
+    if ([r, g, b].some((component) => component === null)) {
+      return null;
+    }
+
+    return { r: r as number, g: g as number, b: b as number };
+  }
+
+  private parseRgbComponent(component: string): number | null {
+    const trimmed = component.trim();
+    const parsed = Number.parseFloat(trimmed);
+    if (!Number.isFinite(parsed)) {
+      return null;
+    }
+
+    return this.clampColor(Math.round(trimmed.endsWith('%') ? parsed * 2.55 : parsed));
+  }
+
+  private ensureReadableAccentColor(
+    color: RgbColor,
+    background: RgbColor,
+    isDark: boolean,
+    minContrast = 4.2,
+  ): RgbColor {
+    let hsl = this.rgbToHsl(color);
+    let readable = color;
+
+    for (let index = 0; index < 10; index += 1) {
+      if (this.contrastRatio(readable, background) >= minContrast) {
+        return readable;
+      }
+
+      hsl = {
+        ...hsl,
+        l: isDark
+          ? Math.min(0.82, hsl.l + 0.055)
+          : Math.max(0.22, hsl.l - 0.055),
+      };
+      readable = this.hslToRgb(hsl);
+    }
+
+    return readable;
+  }
+
+  private contrastRatio(first: RgbColor, second: RgbColor): number {
+    const lighter = Math.max(this.relativeLuminance(first), this.relativeLuminance(second));
+    const darker = Math.min(this.relativeLuminance(first), this.relativeLuminance(second));
+    return (lighter + 0.05) / (darker + 0.05);
+  }
+
+  private relativeLuminance(color: RgbColor): number {
+    const [r, g, b] = [color.r, color.g, color.b].map((component) => {
+      const normalized = component / 255;
+      return normalized <= 0.03928
+        ? normalized / 12.92
+        : ((normalized + 0.055) / 1.055) ** 2.4;
+    });
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  }
+
+  private mixColors(from: RgbColor, to: RgbColor, toWeight: number): RgbColor {
+    const weight = Math.max(0, Math.min(1, toWeight));
+    return {
+      r: this.clampColor(Math.round(from.r * (1 - weight) + to.r * weight)),
+      g: this.clampColor(Math.round(from.g * (1 - weight) + to.g * weight)),
+      b: this.clampColor(Math.round(from.b * (1 - weight) + to.b * weight)),
+    };
+  }
+
+  private shiftAccentLightness(color: RgbColor, delta: number): RgbColor {
+    const hsl = this.rgbToHsl(color);
+    return this.hslToRgb({
+      ...hsl,
+      l: Math.max(0, Math.min(1, hsl.l + delta)),
+    });
+  }
+
+  private rgbToHsl(color: RgbColor): HslColor {
+    const r = color.r / 255;
+    const g = color.g / 255;
+    const b = color.b / 255;
+    const max = Math.max(r, g, b);
+    const min = Math.min(r, g, b);
+    const l = (max + min) / 2;
+
+    if (max === min) {
+      return { h: 0, s: 0, l };
+    }
+
+    const delta = max - min;
+    const s = l > 0.5
+      ? delta / (2 - max - min)
+      : delta / (max + min);
+    let h = 0;
+
+    if (max === r) {
+      h = (g - b) / delta + (g < b ? 6 : 0);
+    } else if (max === g) {
+      h = (b - r) / delta + 2;
+    } else {
+      h = (r - g) / delta + 4;
+    }
+
+    return { h: h / 6, s, l };
+  }
+
+  private hslToRgb(color: HslColor): RgbColor {
+    if (color.s === 0) {
+      const value = this.clampColor(Math.round(color.l * 255));
+      return { r: value, g: value, b: value };
+    }
+
+    const q = color.l < 0.5
+      ? color.l * (1 + color.s)
+      : color.l + color.s - color.l * color.s;
+    const p = 2 * color.l - q;
+
+    return {
+      r: this.clampColor(Math.round(this.hueToRgb(p, q, color.h + 1 / 3) * 255)),
+      g: this.clampColor(Math.round(this.hueToRgb(p, q, color.h) * 255)),
+      b: this.clampColor(Math.round(this.hueToRgb(p, q, color.h - 1 / 3) * 255)),
+    };
+  }
+
+  private hueToRgb(p: number, q: number, t: number): number {
+    let hue = t;
+    if (hue < 0) hue += 1;
+    if (hue > 1) hue -= 1;
+    if (hue < 1 / 6) return p + (q - p) * 6 * hue;
+    if (hue < 1 / 2) return q;
+    if (hue < 2 / 3) return p + (q - p) * (2 / 3 - hue) * 6;
+    return p;
+  }
+
+  private rgbToCss(color: RgbColor): string {
+    return `rgb(${color.r}, ${color.g}, ${color.b})`;
+  }
+
+  private rgbToRgba(color: RgbColor, alpha: number): string {
+    return `rgba(${color.r}, ${color.g}, ${color.b}, ${Math.max(0, Math.min(1, alpha))})`;
+  }
+
+  private clampColor(value: number): number {
+    return Math.max(0, Math.min(255, value));
   }
 
   private shouldUseTransparentTerminalBackground(): boolean {
@@ -771,6 +1092,12 @@ export class TerminalInstance {
       this.xterm.parser.registerOscHandler(52, (data) => {
         return this.handleOsc52ClipboardData(data, 'OSC 52');
       }),
+      this.xterm.parser.registerOscHandler(10, (data) => {
+        return this.handleDefaultColorQuery(data, 10);
+      }),
+      this.xterm.parser.registerOscHandler(11, (data) => {
+        return this.handleDefaultColorQuery(data, 11);
+      }),
       this.xterm.parser.registerCsiHandler({ prefix: '>', final: 'm' }, (params) => {
         if (params[0] !== 4) {
           return false;
@@ -789,6 +1116,21 @@ export class TerminalInstance {
         return false;
       }),
     );
+  }
+
+  private handleDefaultColorQuery(data: string, slot: 10 | 11): boolean {
+    if (data.trim() !== '?') {
+      return false;
+    }
+
+    const theme = this.getTheme();
+    const color = this.colorToRgb(slot === 10 ? theme.foreground : theme.background);
+    if (!color) {
+      return false;
+    }
+
+    this.write(formatOscColorResponse(slot, color));
+    return true;
   }
 
   private getClaudeCodeExtendedKeyboardMode(): ClaudeCodeExtendedKeyboardMode {

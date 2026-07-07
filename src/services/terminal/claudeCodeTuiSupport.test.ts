@@ -6,6 +6,7 @@ import {
   decodeOsc52Clipboard,
   decodeTmuxPassthroughOsc52Clipboard,
   encodeClaudeCodeExtendedKey,
+  formatOscColorResponse,
   XTERM_JS_VERSION,
   XTVERSION_RESPONSE,
 } from './claudeCodeTuiSupport.ts';
@@ -40,6 +41,19 @@ test('buildClaudeCodeTuiEnv preserves user overrides', () => {
   assert.equal(env.FORCE_HYPERLINK, '0');
 });
 
+test('buildClaudeCodeTuiEnv clears inherited no-color mode', () => {
+  const env = buildClaudeCodeTuiEnv(
+    {
+      NO_COLOR: '1',
+    },
+    {
+      NO_COLOR: '1',
+    },
+  );
+
+  assert.equal('NO_COLOR' in env, false);
+});
+
 test('decodeOsc52Clipboard decodes clipboard selection payloads', () => {
   const text = 'hello Claude 世界';
   const payload = Buffer.from(text, 'utf8').toString('base64');
@@ -63,6 +77,11 @@ test('decodeTmuxPassthroughOsc52Clipboard unwraps tmux DCS passthrough', () => {
   const tmuxDcsPayload = `mux;${osc52.replaceAll('\x1b', '\x1b\x1b')}`;
 
   assert.equal(decodeTmuxPassthroughOsc52Clipboard(tmuxDcsPayload), text);
+});
+
+test('formatOscColorResponse emits xterm default-color replies', () => {
+  assert.equal(formatOscColorResponse(10, { r: 238, g: 127.4, b: -2 }), '\x1b]10;rgb:eeee/7f7f/0000\x1b\\');
+  assert.equal(formatOscColorResponse(11, { r: 17, g: 255, b: 512 }), '\x1b]11;rgb:1111/ffff/ffff\x1b\\');
 });
 
 test('encodeClaudeCodeExtendedKey emits modifyOtherKeys sequences', () => {
