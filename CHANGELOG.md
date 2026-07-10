@@ -5,6 +5,21 @@ All notable changes to Termy will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.7] - 2026-07-10
+
+### Added
+- Added a Codex activity overlay that shows the current prompt and public progress or reasoning summaries while leaving tool output and the final answer in the terminal transcript.
+- Added Sixel image support through the xterm image addon, including terminal capability reporting and a bounded image cache.
+
+### Changed
+- Rendered Codex activity with Obsidian's Markdown engine and theme typography, with a two-line prompt area and a progress area that grows with content up to half the terminal height.
+- Show the activity overlay only when the terminal has scrollback and is at the bottom; scrolling upward hides it, while new progress stays pinned to the latest update.
+- Replaced the agent monitor's manual refresh and expandable session-details controls with a persistent Codex activity toggle.
+
+### Fixed
+- Fixed Codex sessions remaining green after a turn completed by honoring canonical turn lifecycle events and preventing stale running hooks from overriding runtime completion.
+- Ignored persistent `codex-code-mode-host` companion processes when deciding whether Codex still has active background work.
+
 ## [1.5.6] - 2026-07-07
 
 ### Changed

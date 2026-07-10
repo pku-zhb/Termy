@@ -36,6 +36,7 @@ import {
   XTVERSION_RESPONSE,
 } from './claudeCodeTuiSupport';
 import { ClaudeCodeSessionState } from './claudeCodeSessionState';
+import { createTerminalImageAddonOptions } from './terminalImageSupport';
 import { TerminalTitleState } from './terminalTitleState';
 import { resolveTerminalContextMenuAction } from './terminalContextMenuRouter';
 import {
@@ -99,6 +100,7 @@ let xtermModules: {
   SearchAddon: typeof import('@xterm/addon-search').SearchAddon;
   CanvasAddon: typeof import('@xterm/addon-canvas').CanvasAddon;
   WebglAddon: typeof import('@xterm/addon-webgl').WebglAddon;
+  ImageAddon: typeof import('@xterm/addon-image').ImageAddon;
 } | null = null;
 
 /**
@@ -120,21 +122,23 @@ async function loadXtermModules() {
       { FitAddon },
       { SearchAddon },
       { CanvasAddon },
-      { WebglAddon }
+      { WebglAddon },
+      { ImageAddon },
     ] = await Promise.all([
       import('@xterm/xterm'),
       import('@xterm/addon-fit'),
       import('@xterm/addon-search'),
       import('@xterm/addon-canvas'),
-      import('@xterm/addon-webgl')
+      import('@xterm/addon-webgl'),
+      import('@xterm/addon-image'),
     ]);
     
     // Verify that all modules were loaded successfully
-    if (!Terminal || !FitAddon || !SearchAddon || !CanvasAddon || !WebglAddon) {
+    if (!Terminal || !FitAddon || !SearchAddon || !CanvasAddon || !WebglAddon || !ImageAddon) {
       throw new Error('One or more xterm.js modules failed to load');
     }
     
-    xtermModules = { Terminal, FitAddon, SearchAddon, CanvasAddon, WebglAddon };
+    xtermModules = { Terminal, FitAddon, SearchAddon, CanvasAddon, WebglAddon, ImageAddon };
     debugLog('[Terminal] xterm.js 模块加载完成');
     
     return xtermModules;
@@ -304,7 +308,7 @@ export class TerminalInstance {
    */
   private async initXterm(): Promise<void> {
     try {
-      const { Terminal, FitAddon, SearchAddon } = await loadXtermModules();
+      const { Terminal, FitAddon, SearchAddon, ImageAddon } = await loadXtermModules();
       
       this.xterm = new Terminal({
         cursorBlink: this.options.cursorBlink ?? true,
@@ -324,9 +328,11 @@ export class TerminalInstance {
 
       this.fitAddon = new FitAddon();
       this.searchAddon = new SearchAddon();
+      const imageAddon = new ImageAddon(createTerminalImageAddonOptions());
       
       this.xterm.loadAddon(this.fitAddon);
       this.xterm.loadAddon(this.searchAddon);
+      this.xterm.loadAddon(imageAddon);
       
       this.setupClaudeCodeTuiHandlers();
       

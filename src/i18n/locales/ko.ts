@@ -40,6 +40,15 @@ export const ko: TranslationKeys = {
       next: '다음',
       close: '닫기',
     },
+    sessionActivity: {
+      task: '작업',
+      progress: '진행 상황',
+      waitingPrompt: '현재 프롬프트 대기 중...',
+      waitingProgress: 'Codex 처리 중...',
+      noProgress: '이 턴에는 공개된 진행 상황이 없습니다.',
+      showPanel: 'Codex 진행 패널 표시',
+      hidePanel: 'Codex 진행 패널 숨기기',
+    },
     contextMenu: {
       copy: '복사',
       copyAsPlainText: '일반 텍스트로 복사',

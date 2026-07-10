@@ -289,8 +289,7 @@ export class AgentScanner {
       pid: process.pid,
       hasActiveChild,
     }, this.now());
-    const shouldUseHookWithoutRuntime = hook?.authoritativeState === 'running'
-      || hook?.authoritativeState === 'waitingApproval'
+    const shouldUseHookWithoutRuntime = hook?.authoritativeState === 'waitingApproval'
       || hook?.authoritativeState === 'idle';
     const fallbackState = this.processState(hasActiveChild);
     const runtime = shouldUseHookWithoutRuntime
@@ -305,7 +304,12 @@ export class AgentScanner {
         hasActiveChild,
       }, this.now());
     }
-    const state = hook?.authoritativeState ?? (runtime.state === 'unknown' ? fallbackState : runtime.state);
+    const state = resolveCodexClientState(
+      hook?.authoritativeState ?? null,
+      runtime.state,
+      fallbackState,
+    );
+    const hookDeterminedState = hook?.authoritativeState === state;
 
     const tmuxPane = this.tmuxPaneForProcess(process, tmuxPaneByTty);
 
@@ -322,7 +326,9 @@ export class AgentScanner {
       state,
       cwd: thread?.cwd ?? hook?.record.cwd ?? null,
       title: thread?.title ?? hook?.record.title ?? this.processTitle('codex', process),
-      detail: hookDetail(hook?.record.detail ?? null, hook?.record.eventName ?? null) ?? runtime.detail ?? detailText('process', state),
+      detail: (hookDeterminedState
+        ? hookDetail(hook?.record.detail ?? null, hook?.record.eventName ?? null)
+        : runtime.detail) ?? detailText('process', state),
       lastSeenAtMs: newestTime(runtime.lastSeenAtMs, thread?.updatedAtMs ?? null, hook?.record.updatedAtMs ?? null),
       waitingSinceMs: state === 'waitingApproval' ? (hook?.record.waitingSinceMs ?? runtime.waitingSinceMs) : null,
     };
@@ -561,7 +567,13 @@ export class AgentScanner {
   }
 
   private isCodexCompanionChild(process: ProcInfo): boolean {
-    return process.args.includes('/Codex.app/Contents/Resources/node_repl')
+    const executable = this.executableName(process);
+    const argumentExecutable = basename(argumentTokens(process.args)[0] ?? '');
+    return executable === 'codex-code-mode-host'
+      || executable === 'codex-code-mode-host.exe'
+      || argumentExecutable === 'codex-code-mode-host'
+      || argumentExecutable === 'codex-code-mode-host.exe'
+      || process.args.includes('/Codex.app/Contents/Resources/node_repl')
       || process.args.includes('/Codex.app/Contents/Resources/codex app-server')
       || process.args.includes('/codex app-server --listen stdio://')
       || process.args.endsWith('/Resources/node_repl');
@@ -636,7 +648,23 @@ SELECT
   COALESCE(MAX(CASE WHEN target = 'codex_core::stream_events_utils' AND feedback_log_body LIKE '%:handle_output_item_done: ToolCall:%' THEN ts * 1000000000 + ts_nanos END), 0),
   COALESCE(MAX(CASE WHEN target = 'codex_otel.trace_safe' AND feedback_log_body LIKE '%event.name="codex.tool_result"%' THEN ts * 1000000000 + ts_nanos END), 0),
   COALESCE(MAX(CASE WHEN target = 'codex_core::session::turn' AND feedback_log_body LIKE '%:run_turn: post sampling token usage%' AND feedback_log_body LIKE '% needs_follow_up=true%' THEN ts * 1000000000 + ts_nanos END), 0),
-  COALESCE(MAX(CASE WHEN target = 'codex_core::session::turn' AND feedback_log_body LIKE '%:run_turn: post sampling token usage%' AND feedback_log_body LIKE '% needs_follow_up=false%' THEN ts * 1000000000 + ts_nanos END), 0)
+  COALESCE(MAX(CASE WHEN target = 'codex_core::session::turn' AND feedback_log_body LIKE '%:run_turn: post sampling token usage%' AND feedback_log_body LIKE '% needs_follow_up=false%' THEN ts * 1000000000 + ts_nanos END), 0),
+  COALESCE((
+    SELECT MAX(ts * 1000000000 + ts_nanos)
+    FROM logs
+    WHERE ts >= strftime('%s','now') - ${CODEX_THREAD_LOOKUP_WINDOW_SECONDS}
+      AND process_uuid LIKE '${sqlEscape(like)}'
+      AND target = 'codex_app_server::outgoing_message'
+      AND feedback_log_body LIKE 'app-server event: turn/started%'
+  ), 0),
+  COALESCE((
+    SELECT MAX(ts * 1000000000 + ts_nanos)
+    FROM logs
+    WHERE ts >= strftime('%s','now') - ${CODEX_THREAD_LOOKUP_WINDOW_SECONDS}
+      AND process_uuid LIKE '${sqlEscape(like)}'
+      AND target = 'codex_app_server::outgoing_message'
+      AND feedback_log_body LIKE 'app-server event: turn/completed%'
+  ), 0)
 FROM logs
 WHERE thread_id = (SELECT thread_id FROM latest_thread);
 `;
@@ -658,6 +686,8 @@ WHERE thread_id = (SELECT thread_id FROM latest_thread);
     const anyToolResult = bigIntValue(metrics[12]);
     const turnNeedsFollowUp = bigIntValue(metrics[13]);
     const turnFinished = bigIntValue(metrics[14]);
+    const canonicalTurnStart = bigIntValue(metrics[15]);
+    const canonicalTurnEnd = bigIntValue(metrics[16]);
 
     const approvalResolvedNs = maxBigInt(approval, toolResult, interrupt);
     const questionResolvedNs = maxBigInt(questionResult, interrupt);
@@ -675,10 +705,12 @@ WHERE thread_id = (SELECT thread_id FROM latest_thread);
     const toolCallPending = toolCall > anyToolResult && toolCallIsRecent;
     const strictTurnResolved = maxBigInt(turnFinished, interrupt);
     const hasStrictTurnSignal = maxBigInt(turnNeedsFollowUp, turnFinished) > 0n;
-    const strictTurnRunning = turnNeedsFollowUp > strictTurnResolved;
-    const strictTurnFinished = hasStrictTurnSignal
-      && strictTurnResolved > turnNeedsFollowUp
-      && turnActivityNs <= strictTurnResolved;
+    const strictTurnRunning = canonicalTurnStart > canonicalTurnEnd
+      || turnNeedsFollowUp > strictTurnResolved;
+    const strictTurnFinished = canonicalTurnEnd > canonicalTurnStart
+      || (hasStrictTurnSignal
+        && strictTurnResolved > turnNeedsFollowUp
+        && turnActivityNs <= strictTurnResolved);
 
     const state = resolveCodexState({
       approvalPending,
@@ -779,11 +811,14 @@ export function resolveCodexState(input: CodexStateInput): AgentState {
   if (input.approvalPending || input.questionPending) {
     return 'waitingApproval';
   }
-  if (input.hasActiveToolChild || input.toolCallPending || input.strictTurnRunning) {
+  if (input.hasActiveToolChild || input.strictTurnRunning) {
     return 'running';
   }
   if (input.strictTurnFinished) {
     return 'idle';
+  }
+  if (input.toolCallPending) {
+    return 'running';
   }
   if (input.turnStart > input.turnEnd || input.hasRecentTurnActivity) {
     return 'running';
@@ -792,6 +827,20 @@ export function resolveCodexState(input: CodexStateInput): AgentState {
     return 'idle';
   }
   return 'unknown';
+}
+
+function resolveCodexClientState(
+  hookState: AgentState | null,
+  runtimeState: AgentState,
+  fallbackState: AgentState,
+): AgentState {
+  if (hookState === 'waitingApproval' || hookState === 'idle' || hookState === 'stale') {
+    return hookState;
+  }
+  if (hookState === 'running') {
+    return runtimeState === 'unknown' ? hookState : runtimeState;
+  }
+  return runtimeState === 'unknown' ? fallbackState : runtimeState;
 }
 
 function unknownCodexRuntimeInfo(): CodexRuntimeInfo {

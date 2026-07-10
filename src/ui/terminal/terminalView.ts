@@ -1,5 +1,16 @@
 import type { WorkspaceLeaf, Menu } from 'obsidian';
-import { FileSystemAdapter, ItemView, MarkdownView, Notice, Scope, TFile, TFolder, setIcon } from 'obsidian';
+import {
+  Component,
+  FileSystemAdapter,
+  ItemView,
+  MarkdownRenderer,
+  MarkdownView,
+  Notice,
+  Scope,
+  TFile,
+  TFolder,
+  setIcon,
+} from 'obsidian';
 import { shell, webUtils } from 'electron';
 
 /**
@@ -47,6 +58,11 @@ import {
   type RestoredTerminalTab,
   type TerminalRestoreSnapshot,
 } from '../../services/terminal/terminalRestoreState';
+import {
+  CodexSessionActivityParser,
+  isTerminalViewportAtScrollableBottom,
+  type CodexSessionActivity,
+} from '../../services/terminal/codexSessionActivity';
 import {
   collectTerminalReferenceCandidatePaths,
   fileUriToPlatformPath,
@@ -96,6 +112,10 @@ export const TERMINAL_VIEW_TYPE = 'terminal-view';
 const TERMINAL_FOCUS_RETRY_DELAYS_MS = [0, 50, 150] as const;
 const RESTORED_AGENT_METADATA_GRACE_MS = 2 * 60 * 1000;
 const CLAUDE_HOOK_SESSION_LOOKBACK_MS = 10 * 60 * 1000;
+const CODEX_ACTIVITY_POLL_MS = 750;
+const CODEX_ACTIVITY_PATH_RETRY_MS = 2_000;
+const CODEX_ACTIVITY_MAX_READ_BYTES = 8 * 1024 * 1024;
+const CODEX_ACTIVITY_VISIBLE_UPDATES = 8;
 const IDLE_SHELL_PROCESS_NAMES = new Set([
   'bash',
   'cmd',
@@ -307,6 +327,19 @@ export class TerminalView extends ItemView {
   private agentStatusUnsubscribe: (() => void) | null = null;
   private latestAgentSnapshot: AgentSnapshot | null = null;
   private tabBarEl: HTMLElement | null = null;
+  private codexActivityEl: HTMLElement | null = null;
+  private codexActivityTimer: number | null = null;
+  private codexActivitySessionId: string | null = null;
+  private codexActivityTranscriptPath: string | null = null;
+  private codexActivityTranscriptOffset = 0;
+  private codexActivityTranscriptLoaded = false;
+  private codexActivityNextPathResolveAtMs = 0;
+  private codexActivityRenderKey = '';
+  private readonly codexActivityParser = new CodexSessionActivityParser();
+  private readonly codexTranscriptPathCache = new Map<string, string>();
+  private codexActivityScrollDisposable: XtermDisposable | null = null;
+  private codexActivityMarkdownComponent: Component | null = null;
+  private codexActivityEnabled: boolean;
   private terminalContainer: HTMLElement | null = null;
   private dropHintEl: HTMLElement | null = null;
   private dragEnterDepth = 0;
@@ -335,17 +368,22 @@ export class TerminalView extends ItemView {
   private readonly closingTabs = new Set<TerminalInstance>();
   private readonly detachLeafWithoutConfirmation: WorkspaceLeaf['detach'];
   private viewCloseConfirmationPromise: Promise<boolean> | null = null;
+  private readonly onCodexActivityEnabledChange: ((enabled: boolean) => void) | null;
 
   constructor(
     leaf: WorkspaceLeaf,
     terminalService: TerminalService | null,
     agentStatusService: AgentStatusService | null = null,
     restoreStore: TerminalRestoreStore | null = null,
+    codexActivityEnabled = true,
+    onCodexActivityEnabledChange: ((enabled: boolean) => void) | null = null,
   ) {
     super(leaf);
     this.terminalService = terminalService;
     this.agentStatusService = agentStatusService;
     this.restoreStore = restoreStore;
+    this.codexActivityEnabled = codexActivityEnabled;
+    this.onCodexActivityEnabledChange = onCodexActivityEnabledChange;
     this.fs = window.require('fs') as FsModule;
     const os = window.require('os') as OsModule;
     this.homeDir = os.homedir();
@@ -416,7 +454,10 @@ export class TerminalView extends ItemView {
     container.empty();
     container.addClass('terminal-view-container');
 
-    this.agentMonitor = new AgentMonitor(container, this.agentStatusService);
+    this.agentMonitor = new AgentMonitor(container, this.agentStatusService, {
+      codexActivityEnabled: this.codexActivityEnabled,
+      onCodexActivityToggle: (enabled) => this.setCodexActivityEnabled(enabled, true),
+    });
     this.bindAgentStatusSnapshot();
 
     // 内部 tab 栏（顶部），管理本 view 内的多个终端
@@ -428,6 +469,13 @@ export class TerminalView extends ItemView {
 
     // terminalContainer 作为多个终端 pane 的父容器
     this.terminalContainer = container.createDiv('terminal-container');
+
+    // 覆盖在终端上半部，不参与布局；工具调用仍只留在下方完整终端中。
+    this.codexActivityEl = this.terminalContainer.createDiv('termy-codex-activity');
+    if (this.codexActivityEnabled) {
+      this.startCodexActivityPolling();
+    }
+
     this.ensureDropHint();
     this.hideDropHint();
     if (!this.removeDropHandlers) {
@@ -551,11 +599,15 @@ export class TerminalView extends ItemView {
     this.titleChangeCleanup = null;
     this.searchStateCleanup?.();
     this.searchStateCleanup = null;
+    this.codexActivityScrollDisposable?.dispose();
+    this.codexActivityScrollDisposable = null;
     this.agentMonitor?.dispose();
     this.agentMonitor = null;
     this.agentStatusUnsubscribe?.();
     this.agentStatusUnsubscribe = null;
     this.latestAgentSnapshot = null;
+    this.stopCodexActivityPolling();
+    this.codexActivityEl = null;
     this.removeDropHandlers?.();
     this.removeDropHandlers = null;
     this.dragEnterDepth = 0;
@@ -594,6 +646,24 @@ export class TerminalView extends ItemView {
     this.bindAgentStatusSnapshot();
   }
 
+  setCodexActivityEnabled(enabled: boolean, notify = false): void {
+    const changed = enabled !== this.codexActivityEnabled;
+    this.codexActivityEnabled = enabled;
+    this.agentMonitor?.setCodexActivityEnabled(enabled);
+
+    if (changed && this.codexActivityEl) {
+      if (enabled) {
+        this.startCodexActivityPolling();
+      } else {
+        this.stopCodexActivityPolling();
+      }
+    }
+
+    if (notify && changed) {
+      this.onCodexActivityEnabledChange?.(enabled);
+    }
+  }
+
   private bindAgentStatusSnapshot(): void {
     this.agentStatusUnsubscribe?.();
     this.agentStatusUnsubscribe = null;
@@ -601,6 +671,7 @@ export class TerminalView extends ItemView {
     if (!this.agentStatusService) {
       this.latestAgentSnapshot = null;
       this.renderTabBar();
+      this.refreshCodexActivity();
       return;
     }
 
@@ -608,6 +679,7 @@ export class TerminalView extends ItemView {
       this.latestAgentSnapshot = snapshot;
       const rememberedAgentChanged = this.refreshRememberedAgentsFromSnapshot();
       this.renderTabBar();
+      this.refreshCodexActivity();
       if (rememberedAgentChanged) {
         this.scheduleRestoreStatePersist();
       }
@@ -1216,6 +1288,7 @@ export class TerminalView extends ItemView {
     }, 0);
 
     this.renderTabBar();
+    this.refreshCodexActivity();
     this.updateLeafHeader(this.leaf);
     this.updateDropHintText();
     this.scheduleRestoreStatePersist();
@@ -1338,6 +1411,319 @@ export class TerminalView extends ItemView {
     const addBtn = bar.createDiv('termy-tab-add');
     setIcon(addBtn, 'plus');
     addBtn.addEventListener('click', () => void this.addTab());
+  }
+
+  private startCodexActivityPolling(): void {
+    this.stopCodexActivityPolling();
+    this.refreshCodexActivity();
+    this.codexActivityTimer = window.setInterval(() => {
+      this.refreshCodexActivity();
+    }, CODEX_ACTIVITY_POLL_MS);
+  }
+
+  private stopCodexActivityPolling(): void {
+    if (this.codexActivityTimer !== null) {
+      window.clearInterval(this.codexActivityTimer);
+      this.codexActivityTimer = null;
+    }
+    this.resetCodexActivitySource(null);
+    this.renderCodexActivityPanel(null, null);
+  }
+
+  private refreshCodexActivity(): void {
+    if (!this.codexActivityEnabled) {
+      return;
+    }
+    const sessionId = this.activeCodexSessionId();
+    if (!sessionId) {
+      if (this.codexActivitySessionId !== null) {
+        this.resetCodexActivitySource(null);
+      }
+      this.renderCodexActivityPanel(null, null);
+      return;
+    }
+
+    if (sessionId !== this.codexActivitySessionId) {
+      this.resetCodexActivitySource(sessionId);
+    }
+
+    if (!this.codexActivityTranscriptPath) {
+      if (Date.now() >= this.codexActivityNextPathResolveAtMs) {
+        this.codexActivityTranscriptPath = this.resolveCodexTranscriptPath(sessionId);
+        this.codexActivityNextPathResolveAtMs = Date.now() + CODEX_ACTIVITY_PATH_RETRY_MS;
+      }
+      if (!this.codexActivityTranscriptPath) {
+        this.renderCodexActivityPanel(sessionId, null);
+        return;
+      }
+    }
+
+    try {
+      const stat = this.fs.statSync(this.codexActivityTranscriptPath);
+      if (!stat.isFile()) {
+        throw new Error('Codex transcript is not a file');
+      }
+      if (stat.size < this.codexActivityTranscriptOffset) {
+        this.codexActivityTranscriptLoaded = false;
+        this.codexActivityTranscriptOffset = 0;
+        this.codexActivityParser.reset();
+      }
+
+      if (!this.codexActivityTranscriptLoaded) {
+        const start = Math.max(0, stat.size - CODEX_ACTIVITY_MAX_READ_BYTES);
+        const chunk = this.readCodexTranscriptRange(
+          this.codexActivityTranscriptPath,
+          start,
+          stat.size - start,
+        );
+        this.codexActivityParser.reset();
+        this.codexActivityParser.push(chunk, start > 0);
+        this.codexActivityTranscriptOffset = stat.size;
+        this.codexActivityTranscriptLoaded = true;
+      } else if (stat.size > this.codexActivityTranscriptOffset) {
+        const unreadBytes = stat.size - this.codexActivityTranscriptOffset;
+        if (unreadBytes > CODEX_ACTIVITY_MAX_READ_BYTES) {
+          const start = stat.size - CODEX_ACTIVITY_MAX_READ_BYTES;
+          const chunk = this.readCodexTranscriptRange(
+            this.codexActivityTranscriptPath,
+            start,
+            CODEX_ACTIVITY_MAX_READ_BYTES,
+          );
+          this.codexActivityParser.reset();
+          this.codexActivityParser.push(chunk, true);
+        } else {
+          const chunk = this.readCodexTranscriptRange(
+            this.codexActivityTranscriptPath,
+            this.codexActivityTranscriptOffset,
+            unreadBytes,
+          );
+          this.codexActivityParser.push(chunk);
+        }
+        this.codexActivityTranscriptOffset = stat.size;
+      }
+
+      this.renderCodexActivityPanel(sessionId, this.codexActivityParser.getActivity());
+    } catch (error) {
+      debugLog('[TerminalView] Failed to read Codex session activity:', error);
+      this.codexActivityTranscriptPath = null;
+      this.codexActivityTranscriptLoaded = false;
+      this.codexActivityTranscriptOffset = 0;
+      this.codexActivityNextPathResolveAtMs = Date.now() + CODEX_ACTIVITY_PATH_RETRY_MS;
+      this.renderCodexActivityPanel(sessionId, null);
+    }
+  }
+
+  private activeCodexSessionId(): string | null {
+    const tab = this.tabs[this.activeIndex];
+    if (!tab) {
+      return null;
+    }
+
+    const liveClient = this.matchingAgentClientsForTab(tab, RESTORE_AGENT_MATCH_OPTIONS)
+      .find((client) => client.kind === 'codex' && client.agentSessionId);
+    if (liveClient?.agentSessionId) {
+      this.rememberAgentClient(tab, liveClient);
+      return liveClient.agentSessionId;
+    }
+
+    if (tab.lastKnownAgentKind !== 'codex') {
+      return null;
+    }
+    return normalizeRestoredAgentSessionId(tab.lastKnownAgentSessionId);
+  }
+
+  private resetCodexActivitySource(sessionId: string | null): void {
+    this.codexActivitySessionId = sessionId;
+    this.codexActivityTranscriptPath = null;
+    this.codexActivityTranscriptOffset = 0;
+    this.codexActivityTranscriptLoaded = false;
+    this.codexActivityNextPathResolveAtMs = 0;
+    this.codexActivityParser.reset();
+    this.codexActivityRenderKey = '';
+  }
+
+  private resolveCodexTranscriptPath(sessionId: string): string | null {
+    if (!/^[A-Za-z0-9-]+$/.test(sessionId)) {
+      return null;
+    }
+
+    const cached = this.codexTranscriptPathCache.get(sessionId);
+    if (cached && this.fs.existsSync(cached)) {
+      return cached;
+    }
+
+    const codexDir = this.path.join(this.homeDir, '.codex');
+    for (const root of [
+      this.path.join(codexDir, 'sessions'),
+      this.path.join(codexDir, 'archived_sessions'),
+    ]) {
+      const match = this.findCodexTranscriptInDirectory(root, sessionId);
+      if (match) {
+        this.codexTranscriptPathCache.set(sessionId, match);
+        return match;
+      }
+    }
+    return null;
+  }
+
+  private findCodexTranscriptInDirectory(directory: string, sessionId: string): string | null {
+    let entries: import('fs').Dirent[];
+    try {
+      entries = this.fs.readdirSync(directory, { withFileTypes: true })
+        .sort((left, right) => right.name.localeCompare(left.name));
+    } catch {
+      return null;
+    }
+
+    for (const entry of entries) {
+      if (entry.isFile() && entry.name.endsWith('.jsonl') && entry.name.includes(sessionId)) {
+        return this.path.join(directory, entry.name);
+      }
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory()) {
+        continue;
+      }
+      const match = this.findCodexTranscriptInDirectory(this.path.join(directory, entry.name), sessionId);
+      if (match) {
+        return match;
+      }
+    }
+    return null;
+  }
+
+  private readCodexTranscriptRange(file: string, start: number, length: number): string {
+    if (length <= 0) {
+      return '';
+    }
+    const descriptor = this.fs.openSync(file, 'r');
+    try {
+      const buffer = Buffer.allocUnsafe(length);
+      const bytesRead = this.fs.readSync(descriptor, buffer, 0, length, start);
+      return buffer.toString('utf8', 0, bytesRead);
+    } finally {
+      this.fs.closeSync(descriptor);
+    }
+  }
+
+  private renderCodexActivityPanel(
+    sessionId: string | null,
+    activity: CodexSessionActivity | null,
+  ): void {
+    const panel = this.codexActivityEl;
+    if (!panel) {
+      return;
+    }
+
+    panel.toggleClass('has-session', Boolean(sessionId));
+    this.updateCodexActivityVisibility();
+
+    const renderKey = sessionId
+      ? JSON.stringify([sessionId, activity])
+      : 'hidden';
+    if (renderKey === this.codexActivityRenderKey) {
+      return;
+    }
+    this.codexActivityRenderKey = renderKey;
+
+    this.resetCodexActivityMarkdownComponent();
+    panel.empty();
+    if (!sessionId) {
+      return;
+    }
+
+    const state = activity?.state ?? 'idle';
+    const markdownComponent = this.createCodexActivityMarkdownComponent();
+    const body = panel.createDiv({ cls: ['termy-codex-activity-body', 'markdown-rendered'] });
+    const promptRow = body.createDiv('termy-codex-activity-row is-prompt');
+    const promptLabel = promptRow.createSpan({ cls: 'termy-codex-activity-label', text: '🎯' });
+    promptLabel.title = t('terminal.sessionActivity.task');
+    promptLabel.setAttribute('aria-label', t('terminal.sessionActivity.task'));
+    const prompt = promptRow.createDiv({ cls: ['termy-codex-activity-prompt', 'markdown-rendered'] });
+    if (activity?.prompt) {
+      void MarkdownRenderer.render(this.app, activity.prompt, prompt, '', markdownComponent)
+        .catch((error) => errorLog('[TerminalView] Failed to render Codex prompt Markdown:', error));
+    } else {
+      prompt.setText(t('terminal.sessionActivity.waitingPrompt'));
+    }
+
+    const progressRow = body.createDiv('termy-codex-activity-row is-progress');
+    const progressLabel = progressRow.createSpan({ cls: 'termy-codex-activity-label', text: '💬' });
+    progressLabel.title = t('terminal.sessionActivity.progress');
+    progressLabel.setAttribute('aria-label', t('terminal.sessionActivity.progress'));
+    const progress = progressRow.createDiv('termy-codex-activity-updates');
+    const updates = activity?.updates.slice(-CODEX_ACTIVITY_VISIBLE_UPDATES) ?? [];
+    if (updates.length === 0) {
+      progress.createDiv({
+        cls: 'termy-codex-activity-placeholder',
+        text: state === 'running' || state === 'idle'
+          ? t('terminal.sessionActivity.waitingProgress')
+          : t('terminal.sessionActivity.noProgress'),
+      });
+    } else {
+      const renderPromises: Array<Promise<void>> = [];
+      for (const update of updates) {
+        const updateEl = progress.createDiv('termy-codex-activity-update');
+        updateEl.toggleClass('is-reasoning-summary', update.kind === 'reasoning-summary');
+        const updateText = updateEl.createDiv({
+          cls: ['termy-codex-activity-update-text', 'markdown-rendered'],
+        });
+        renderPromises.push(
+          MarkdownRenderer.render(this.app, update.text, updateText, '', markdownComponent)
+            .catch((error) => errorLog('[TerminalView] Failed to render Codex activity Markdown:', error)),
+        );
+      }
+      void Promise.all(renderPromises).then(() => this.scrollCodexActivityProgressToBottom(progress));
+    }
+    this.updateCodexActivityVisibility();
+  }
+
+  private scrollCodexActivityProgressToBottom(progress: HTMLElement): void {
+    const hostWindow = progress.ownerDocument.defaultView;
+    if (!hostWindow) {
+      progress.scrollTop = progress.scrollHeight;
+      return;
+    }
+
+    // Markdown rendering and theme styles can settle across two frames. Pinning
+    // on both keeps the newest public progress visible without a smooth-scroll jump.
+    hostWindow.requestAnimationFrame(() => {
+      progress.scrollTop = progress.scrollHeight;
+      hostWindow.requestAnimationFrame(() => {
+        progress.scrollTop = progress.scrollHeight;
+      });
+    });
+  }
+
+  private createCodexActivityMarkdownComponent(): Component {
+    this.resetCodexActivityMarkdownComponent();
+    const component = new Component();
+    this.addChild(component);
+    this.codexActivityMarkdownComponent = component;
+    return component;
+  }
+
+  private resetCodexActivityMarkdownComponent(): void {
+    const component = this.codexActivityMarkdownComponent;
+    if (!component) {
+      return;
+    }
+    this.codexActivityMarkdownComponent = null;
+    this.removeChild(component);
+  }
+
+  private updateCodexActivityVisibility(): void {
+    const panel = this.codexActivityEl;
+    const terminal = this.terminalInstance;
+    if (!panel) {
+      return;
+    }
+
+    const buffer = terminal?.getXterm().buffer.active;
+    const atBottom = buffer
+      ? isTerminalViewportAtScrollableBottom(buffer.viewportY, buffer.baseY)
+      : false;
+    panel.toggleClass('is-visible', panel.hasClass('has-session') && atBottom);
   }
 
   private resolveTabAgentStatus(tab: TerminalTabEntry): TerminalTabAgentStatus | null {
@@ -1473,6 +1859,11 @@ export class TerminalView extends ItemView {
       }
     });
 
+    this.codexActivityScrollDisposable = terminal.getXterm().onScroll(() => {
+      this.updateCodexActivityVisibility();
+    });
+    this.updateCodexActivityVisibility();
+
     terminal.setOnNewTerminal(() => {
       void this.createNewTerminal();
     });
@@ -1505,6 +1896,8 @@ export class TerminalView extends ItemView {
     this.titleChangeCleanup = null;
     this.searchStateCleanup?.();
     this.searchStateCleanup = null;
+    this.codexActivityScrollDisposable?.dispose();
+    this.codexActivityScrollDisposable = null;
   }
 
   private disposeTerminalLinkProvider(terminal: TerminalInstance): void {

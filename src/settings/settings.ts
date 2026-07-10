@@ -83,6 +83,9 @@ export interface TerminalSettings {
   // Scrollback buffer size (in lines)
   scrollback: number;
 
+  // Show the Codex public-progress overlay above the active terminal.
+  showCodexActivityPanel: boolean;
+
 
   // Feature visibility settings
   visibility: VisibilityConfig;
@@ -251,6 +254,7 @@ export const DEFAULT_TERMINAL_SETTINGS: TerminalSettings = {
   useObsidianTheme: true,
   preferredRenderer: 'canvas',
   scrollback: 1000,
+  showCodexActivityPanel: true,
   backgroundImageOpacity: 0.5,
   backgroundImageSize: 'cover',
   backgroundImagePosition: 'center',

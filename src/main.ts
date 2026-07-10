@@ -275,6 +275,17 @@ export default class TerminalPlugin extends Plugin {
     }
   }
 
+  async setCodexActivityPanelEnabled(enabled: boolean): Promise<void> {
+    this.settings.showCodexActivityPanel = enabled;
+    for (const leaf of this.app.workspace.getLeavesOfType(TERMINAL_VIEW_TYPE)) {
+      const view = leaf.view;
+      if (view instanceof TerminalView) {
+        view.setCodexActivityEnabled(enabled);
+      }
+    }
+    await this.saveSettings();
+  }
+
   private normalizePresetScripts(value: unknown): PresetScript[] {
     // Drop preset scripts from features that are no longer shipped.
     const REMOVED_PRESET_SCRIPT_IDS = new Set(['claude-code', 'codex', 'opencode']);
@@ -1445,7 +1456,18 @@ class TerminalViewPlaceholder extends TerminalView {
 
   constructor(leaf: WorkspaceLeaf, plugin: TerminalPlugin) {
     // Inject TerminalService lazily to avoid loading xterm.js at startup
-    super(leaf, null, null, plugin.getTerminalRestoreStore());
+    super(
+      leaf,
+      null,
+      null,
+      plugin.getTerminalRestoreStore(),
+      plugin.settings.showCodexActivityPanel,
+      (enabled) => {
+        void plugin.setCodexActivityPanelEnabled(enabled).catch((error) => {
+          errorLog('[TerminalPlugin] Failed to save Codex activity panel setting:', error);
+        });
+      },
+    );
     this.plugin = plugin;
   }
 

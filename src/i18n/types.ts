@@ -51,6 +51,15 @@ export interface TranslationKeys {
       next: string;
       close: string;
     };
+    sessionActivity: {
+      task: string;
+      progress: string;
+      waitingPrompt: string;
+      waitingProgress: string;
+      noProgress: string;
+      showPanel: string;
+      hidePanel: string;
+    };
     contextMenu: {
       copy: string;
       copyAsPlainText: string;

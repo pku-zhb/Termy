@@ -10,6 +10,7 @@ class FakeRuntime implements AgentStatusRuntime {
   files = new Map<string, string>();
   dirs = new Map<string, string[]>();
   commandResults = new Map<string, AgentCommandResult | null>();
+  sqliteResults = new Map<string, AgentCommandResult | null>();
   tmuxPanesResult: AgentCommandResult | null = null;
   tmuxClientsResult: AgentCommandResult | null = null;
 
@@ -26,6 +27,9 @@ class FakeRuntime implements AgentStatusRuntime {
       if (command.includes('list-clients')) {
         return this.tmuxClientsResult;
       }
+    }
+    if (executable === '/usr/bin/sqlite3') {
+      return this.sqliteResults.get(args[3] ?? '') ?? null;
     }
     return this.commandResults.get(`${executable} ${args.join(' ')}`) ?? null;
   }
@@ -118,6 +122,42 @@ test('AgentScanner ignores persistent Codex app companion children', async () =>
   assert.equal(snapshot.summary.running, 0);
   assert.equal(snapshot.summary.idle, 1);
   assert.equal(snapshot.clients.find((client) => client.id === 'codex-501')?.state, 'idle');
+});
+
+test('AgentScanner keeps Codex idle while its code-mode host remains alive', async () => {
+  const runtime = new FakeRuntime();
+  const now = 1_700_000_010_000;
+  runtime.commandResults.set('/bin/ps -axo pid,ppid,pgid,stat,tty,comm,args', {
+    exitCode: 0,
+    stderr: '',
+    stdout: [
+      '  PID  PPID  PGID STAT TTY      COMM             ARGS',
+      '  501     1   501 S+   ttys009  /opt/homebrew/bin/codex codex resume',
+      '  601   501   601 S    ttys009  /Users/example   /opt/homebrew/bin/codex-code-mode-host',
+    ].join('\n'),
+  });
+  runtime.files.set('/Users/example/.termy/agent-status/state.json', JSON.stringify({
+    sessions: {
+      'codex:codex-session-501': {
+        agent: 'codex',
+        sessionId: 'codex-session-501',
+        pid: 501,
+        cwd: '/Users/example/projects/demo',
+        state: 'idle',
+        eventName: 'Stop',
+        updatedAtMs: now - 1000,
+      },
+    },
+  }));
+
+  const snapshot = await new AgentScanner(runtime, { now: () => now }).scan();
+
+  assert.equal(snapshot.summary.running, 0);
+  assert.equal(snapshot.summary.idle, 1);
+  const client = snapshot.clients.find((candidate) => candidate.id === 'codex-501');
+  assert.equal(client?.state, 'idle');
+  assert.equal(client?.detail, 'hook: Stop');
+  assert.equal(client?.agentSessionId, 'codex-session-501');
 });
 
 test('AgentScanner trusts fresh Claude hook running state over stale session freshness', async () => {
@@ -240,6 +280,94 @@ test('AgentScanner trusts fresh Codex hook waiting state without sqlite log scan
   assert.equal(client?.agentSessionId, 'codex-session-501');
 });
 
+test('AgentScanner lets a completed Codex turn override a stale running hook', async () => {
+  const runtime = new FakeRuntime();
+  const now = 1_700_000_010_000;
+  runtime.commandResults.set('/bin/ps -axo pid,ppid,pgid,stat,tty,comm,args', {
+    exitCode: 0,
+    stderr: '',
+    stdout: [
+      '  PID  PPID  PGID STAT TTY      COMM             ARGS',
+      '  501     1   501 S+   ttys009  /opt/homebrew/bin/codex codex resume',
+      '  601   501   601 S    ttys009  /opt/homebrew/bin/codex-code-mode-host /opt/homebrew/bin/codex-code-mode-host',
+    ].join('\n'),
+  });
+  runtime.files.set('/Users/example/.termy/agent-status/state.json', JSON.stringify({
+    sessions: {
+      'codex:codex-session-501': {
+        agent: 'codex',
+        sessionId: 'codex-session-501',
+        pid: 501,
+        cwd: '/Users/example/projects/demo',
+        state: 'running',
+        eventName: 'UserPromptSubmit',
+        updatedAtMs: now - 1000,
+      },
+    },
+  }));
+  runtime.files.set('/Users/example/.codex/logs_2.sqlite', '');
+  runtime.sqliteResults.set('/Users/example/.codex/logs_2.sqlite', {
+    exitCode: 0,
+    stderr: '',
+    stdout: [
+      'codex-session-501',
+      String(BigInt(now) * 1_000_000n),
+      '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0',
+      '100', '200',
+    ].join('\t'),
+  });
+
+  const snapshot = await new AgentScanner(runtime, { now: () => now }).scan();
+
+  assert.equal(snapshot.summary.running, 0);
+  assert.equal(snapshot.summary.idle, 1);
+  const client = snapshot.clients.find((candidate) => candidate.id === 'codex-501');
+  assert.equal(client?.state, 'idle');
+  assert.equal(client?.detail, 'idle');
+});
+
+test('AgentScanner keeps a canonical active Codex turn running', async () => {
+  const runtime = new FakeRuntime();
+  const now = 1_700_000_010_000;
+  runtime.commandResults.set('/bin/ps -axo pid,ppid,pgid,stat,tty,comm,args', {
+    exitCode: 0,
+    stderr: '',
+    stdout: [
+      '  PID  PPID  PGID STAT TTY      COMM             ARGS',
+      '  501     1   501 S+   ttys009  /opt/homebrew/bin/codex codex resume',
+    ].join('\n'),
+  });
+  runtime.files.set('/Users/example/.termy/agent-status/state.json', JSON.stringify({
+    sessions: {
+      'codex:codex-session-501': {
+        agent: 'codex',
+        sessionId: 'codex-session-501',
+        pid: 501,
+        state: 'running',
+        eventName: 'UserPromptSubmit',
+        updatedAtMs: now - 1000,
+      },
+    },
+  }));
+  runtime.files.set('/Users/example/.codex/logs_2.sqlite', '');
+  runtime.sqliteResults.set('/Users/example/.codex/logs_2.sqlite', {
+    exitCode: 0,
+    stderr: '',
+    stdout: [
+      'codex-session-501',
+      String(BigInt(now) * 1_000_000n),
+      '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0',
+      '200', '100',
+    ].join('\t'),
+  });
+
+  const snapshot = await new AgentScanner(runtime, { now: () => now }).scan();
+
+  assert.equal(snapshot.summary.running, 1);
+  assert.equal(snapshot.summary.idle, 0);
+  assert.equal(snapshot.clients.find((candidate) => candidate.id === 'codex-501')?.state, 'running');
+});
+
 test('resolveCodexState keeps attention and active states above idle fallbacks', () => {
   const base = {
     approvalPending: false,
@@ -260,6 +388,8 @@ test('resolveCodexState keeps attention and active states above idle fallbacks',
   assert.equal(resolveCodexState({ ...base, toolCallPending: true }), 'running');
   assert.equal(resolveCodexState({ ...base, strictTurnRunning: true }), 'running');
   assert.equal(resolveCodexState({ ...base, strictTurnFinished: true }), 'idle');
+  assert.equal(resolveCodexState({ ...base, toolCallPending: true, strictTurnFinished: true }), 'idle');
+  assert.equal(resolveCodexState({ ...base, hasActiveToolChild: true, strictTurnFinished: true }), 'running');
   assert.equal(resolveCodexState({ ...base, turnStart: 10n, turnEnd: 9n }), 'running');
   assert.equal(resolveCodexState({ ...base, hasRecentTurnActivity: true }), 'running');
   assert.equal(resolveCodexState({ ...base, hasLastSeen: false }), 'unknown');

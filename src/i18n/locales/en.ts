@@ -40,6 +40,15 @@ export const en: TranslationKeys = {
       next: 'Next',
       close: 'Close',
     },
+    sessionActivity: {
+      task: 'Task',
+      progress: 'Progress',
+      waitingPrompt: 'Waiting for the current prompt...',
+      waitingProgress: 'Codex is processing...',
+      noProgress: 'No public progress updates for this turn.',
+      showPanel: 'Show progress panel',
+      hidePanel: 'Hide progress panel',
+    },
     contextMenu: {
       copy: 'Copy',
       copyAsPlainText: 'Copy as plain text',

@@ -40,6 +40,15 @@ export const ru: TranslationKeys = {
       next: 'Следующий',
       close: 'Закрыть',
     },
+    sessionActivity: {
+      task: 'Задача',
+      progress: 'Ход работы',
+      waitingPrompt: 'Ожидание текущего запроса...',
+      waitingProgress: 'Codex обрабатывает запрос...',
+      noProgress: 'В этом ходе нет публичных обновлений прогресса.',
+      showPanel: 'Показать панель прогресса Codex',
+      hidePanel: 'Скрыть панель прогресса Codex',
+    },
     contextMenu: {
       copy: 'Копировать',
       copyAsPlainText: 'Копировать как простой текст',

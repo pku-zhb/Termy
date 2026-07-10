@@ -40,6 +40,15 @@ export const ja: TranslationKeys = {
       next: '次へ',
       close: '閉じる',
     },
+    sessionActivity: {
+      task: 'タスク',
+      progress: '進行状況',
+      waitingPrompt: '現在のプロンプトを待機中...',
+      waitingProgress: 'Codex が処理中...',
+      noProgress: 'このターンには公開された進捗がありません。',
+      showPanel: 'Codex 進捗パネルを表示',
+      hidePanel: 'Codex 進捗パネルを非表示',
+    },
     contextMenu: {
       copy: 'コピー',
       copyAsPlainText: 'プレーンテキストでコピー',

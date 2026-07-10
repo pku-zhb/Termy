@@ -40,6 +40,15 @@ export const zhCN: TranslationKeys = {
       next: '下一个',
       close: '关闭',
     },
+    sessionActivity: {
+      task: '任务',
+      progress: '进度',
+      waitingPrompt: '等待当前 prompt...',
+      waitingProgress: 'Codex 正在处理...',
+      noProgress: '本轮没有公开阶段进度。',
+      showPanel: '显示 Codex 进度浮窗',
+      hidePanel: '隐藏 Codex 进度浮窗',
+    },
     contextMenu: {
       copy: '复制',
       copyAsPlainText: '复制为纯文本',
