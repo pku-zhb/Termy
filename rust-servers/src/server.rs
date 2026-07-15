@@ -9,6 +9,7 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio::sync::Mutex as TokioMutex;
+use tokio::time::{self, Duration};
 use tokio_tungstenite::{accept_async, tungstenite::Message};
 
 use crate::router::{MessageRouter, ModuleType, RouterError, ServerResponse};
@@ -105,6 +106,42 @@ fn superseded_by_newer_server(parent_pid: u32, current_pid: u32) -> Option<Serve
     None
 }
 
+fn remove_server_registry_if_owned(parent_pid: u32, current_pid: u32) {
+    let path = server_registry_path(parent_pid);
+    let owned = fs::read_to_string(&path)
+        .ok()
+        .and_then(|data| serde_json::from_str::<ServerRegistryEntry>(&data).ok())
+        .map(|entry| entry.parent_pid == parent_pid && entry.pid == current_pid)
+        .unwrap_or(false);
+
+    if owned {
+        if let Err(error) = fs::remove_file(&path) {
+            if error.kind() != std::io::ErrorKind::NotFound {
+                log_error!("删除 server registry 失败 {}: {}", path.display(), error);
+            }
+        }
+    }
+}
+
+async fn cleanup_and_exit(
+    router: &Arc<MessageRouter>,
+    parent_pid: Option<u32>,
+    current_pid: u32,
+) -> ! {
+    const CLEANUP_TIMEOUT: Duration = Duration::from_secs(5);
+
+    if time::timeout(CLEANUP_TIMEOUT, router.pty_handler().cleanup_all())
+        .await
+        .is_err()
+    {
+        log_error!("PTY 清理超过 {:?}，强制结束旧 server", CLEANUP_TIMEOUT);
+    }
+    if let Some(parent_pid) = parent_pid {
+        remove_server_registry_if_owned(parent_pid, current_pid);
+    }
+    std::process::exit(0)
+}
+
 /// 连接生命周期 RAII：进入 +1、离开 -1，并刷新最后活跃时间
 struct ConnectionGuard;
 impl ConnectionGuard {
@@ -179,8 +216,7 @@ impl Server {
                 if let Some(pid) = parent_pid {
                     if !process_exists(pid) {
                         log_info!("父进程 {} 已不存在，清理 PTY 会话并退出", pid);
-                        watchdog_router.pty_handler().cleanup_all().await;
-                        std::process::exit(0);
+                        cleanup_and_exit(&watchdog_router, parent_pid, current_pid).await;
                     }
                 }
 
@@ -194,8 +230,7 @@ impl Server {
                                 newer.pid,
                                 newer.port
                             );
-                            watchdog_router.pty_handler().cleanup_all().await;
-                            std::process::exit(0);
+                            cleanup_and_exit(&watchdog_router, parent_pid, current_pid).await;
                         }
                     }
 
@@ -205,15 +240,14 @@ impl Server {
                             "无活跃 WebSocket 连接且无 PTY 会话已 {}s，自我退出以避免残留",
                             idle
                         );
-                        std::process::exit(0);
+                        cleanup_and_exit(&watchdog_router, parent_pid, current_pid).await;
                     }
                     if has_sessions && idle >= SESSION_DISCONNECTED_TIMEOUT_SECS {
                         log_info!(
                             "无活跃 WebSocket 连接但仍有 PTY 会话已 {}s，清理会话并退出",
                             idle
                         );
-                        watchdog_router.pty_handler().cleanup_all().await;
-                        std::process::exit(0);
+                        cleanup_and_exit(&watchdog_router, parent_pid, current_pid).await;
                     }
                 }
             }

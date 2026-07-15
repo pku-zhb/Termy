@@ -4,6 +4,9 @@ use portable_pty::{native_pty_system, Child, MasterPty, PtySize};
 use std::io::{Read, Write};
 use std::sync::{Arc, Mutex};
 
+#[cfg(unix)]
+use libproc::processes::{pids_by_type, ProcFilter};
+
 /// PTY session
 pub struct PtySession {
     master: Box<dyn MasterPty + Send>,
@@ -125,9 +128,21 @@ impl PtySession {
         })?;
         Ok(())
     }
-    
+
+    /// PID of the PTY session leader spawned by portable-pty.
+    pub fn process_id(&self) -> Option<u32> {
+        self.child.lock().ok()?.process_id()
+    }
+
     /// Terminate the child process and reap it to avoid a zombie.
     pub fn kill(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        if let Some(session_pid) = self.process_id() {
+            // portable-pty starts the shell with setsid(). Interactive programs such as
+            // Codex create their own foreground process groups inside that session, so
+            // killing only the shell can leave those descendants holding the PTY open.
+            kill_process_session(session_pid);
+        }
+
         if let Ok(mut child) = self.child.lock() {
             // 进程可能已自行退出，kill 失败可忽略；关键是随后 wait 回收僵尸。
             let _ = child.kill();
@@ -149,6 +164,45 @@ impl PtySession {
     pub fn master_raw_fd(&self) -> Option<i32> {
         self.master.as_raw_fd()
     }
+}
+
+/// Force-kill every process attached to a portable-pty session.
+///
+/// The PTY shell is a session leader, while interactive children may move into
+/// separate process groups. Matching by session ID therefore covers both the
+/// shell and foreground/background groups without touching other terminals.
+#[cfg(unix)]
+pub(super) fn kill_process_session(session_pid: u32) -> usize {
+    let Ok(mut pids) = pids_by_type(ProcFilter::All) else {
+        return 0;
+    };
+
+    // Kill the session leader last. This keeps the session identity stable while
+    // the remaining members are being selected and signalled.
+    pids.sort_by_key(|pid| *pid == session_pid);
+
+    let own_pid = std::process::id();
+    let mut killed = 0;
+    for pid in pids {
+        if pid == 0 || pid == own_pid {
+            continue;
+        }
+
+        let sid = unsafe { libc::getsid(pid as libc::pid_t) };
+        if sid != session_pid as libc::pid_t {
+            continue;
+        }
+
+        if unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) } == 0 {
+            killed += 1;
+        }
+    }
+    killed
+}
+
+#[cfg(not(unix))]
+pub(super) fn kill_process_session(_session_pid: u32) -> usize {
+    0
 }
 
 impl PtyReader {
@@ -249,4 +303,79 @@ fn fg_cmdline(pid: i32) -> Option<String> {
 #[cfg(not(target_os = "macos"))]
 pub fn foreground_process(_fd: i32) -> Option<(i32, String, String)> {
     None
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use std::thread;
+    use std::time::{Duration, Instant};
+
+    fn process_exists(pid: u32) -> bool {
+        if unsafe { libc::kill(pid as libc::pid_t, 0) } == 0 {
+            return true;
+        }
+        std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+    }
+
+    fn session_members(session_pid: u32) -> Vec<u32> {
+        pids_by_type(ProcFilter::All)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(
+                |pid| unsafe { libc::getsid(*pid as libc::pid_t) } == session_pid as libc::pid_t,
+            )
+            .collect()
+    }
+
+    #[test]
+    fn kill_terminates_all_process_groups_in_pty_session() {
+        let args = vec![
+            "-c".to_string(),
+            "set -m; trap '' HUP TERM; sleep 30 & wait".to_string(),
+        ];
+        let (mut session, _reader, _writer) =
+            PtySession::new(80, 24, Some("custom:/bin/sh"), Some(&args), None, None)
+                .expect("spawn test PTY");
+        let session_pid = session.process_id().expect("PTY child pid");
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let (members, has_separate_group) = loop {
+            let members = session_members(session_pid);
+            let has_separate_group = members.iter().any(|pid| {
+                *pid != session_pid
+                    && unsafe { libc::getpgid(*pid as libc::pid_t) } != session_pid as libc::pid_t
+            });
+            if members.len() >= 2 && has_separate_group {
+                break (members, true);
+            }
+            if Instant::now() >= deadline {
+                break (members, has_separate_group);
+            }
+            thread::sleep(Duration::from_millis(20));
+        };
+
+        // Always clean up before asserting, so a failed test cannot leak its helper.
+        session.kill().expect("kill PTY process session");
+
+        assert!(
+            members.len() >= 2,
+            "expected shell plus a child process, got {members:?}"
+        );
+        assert!(
+            has_separate_group,
+            "expected a child in a separate foreground/background process group"
+        );
+
+        let exit_deadline = Instant::now() + Duration::from_secs(2);
+        for pid in members {
+            while process_exists(pid) && Instant::now() < exit_deadline {
+                thread::sleep(Duration::from_millis(20));
+            }
+            assert!(
+                !process_exists(pid),
+                "PTY session member {pid} survived cleanup"
+            );
+        }
+    }
 }

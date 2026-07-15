@@ -5,6 +5,7 @@ mod osc_scanner;
 mod session;
 mod shell;
 
+use session::kill_process_session;
 pub use session::{PtyReader, PtySession, PtyWriter};
 pub use shell::{get_default_shell, get_shell_by_type};
 
@@ -86,15 +87,22 @@ struct PtySessionContext {
     writer: Arc<Mutex<PtyWriter>>,
     /// Read task handle
     read_task: Option<tokio::task::JoinHandle<()>>,
+    /// PID of the shell/session leader, retained for lock-free emergency cleanup.
+    process_id: Option<u32>,
 }
 
 impl PtySessionContext {
     /// Create a new session context
-    fn new(session: Arc<TokioMutex<PtySession>>, writer: Arc<Mutex<PtyWriter>>) -> Self {
+    fn new(
+        session: Arc<TokioMutex<PtySession>>,
+        writer: Arc<Mutex<PtyWriter>>,
+        process_id: Option<u32>,
+    ) -> Self {
         Self {
             session,
             writer,
             read_task: None,
+            process_id,
         }
     }
 }
@@ -177,13 +185,18 @@ impl PtyHandler {
 
         // 提取 master fd（用于前台进程检测，方案 A；fd 在 session 存活期间有效）
         let master_fd = pty_session.master_raw_fd();
+        let process_id = pty_session.process_id();
 
         // Create the session context
         let pty_session = Arc::new(TokioMutex::new(pty_session));
         let pty_reader = Arc::new(Mutex::new(pty_reader));
         let pty_writer = Arc::new(Mutex::new(pty_writer));
 
-        let mut context = PtySessionContext::new(Arc::clone(&pty_session), Arc::clone(&pty_writer));
+        let mut context = PtySessionContext::new(
+            Arc::clone(&pty_session),
+            Arc::clone(&pty_writer),
+            process_id,
+        );
 
         // Start the PTY output reader task
         // 传入 session 的 Arc 克隆：read task 持有它，保证 master fd 在前台进程轮询期间
@@ -503,21 +516,13 @@ impl PtyHandler {
     pub async fn handle_destroy(&self, session_id: &str) -> Result<(), RouterError> {
         log_info!("销毁 PTY 会话: session_id={}", session_id);
 
-        let mut sessions = self.sessions.lock().await;
-        if let Some(mut context) = sessions.remove(session_id) {
-            // Terminate the PTY process
-            if let Ok(mut session) = context.session.try_lock() {
-                let _ = session.kill();
-            }
+        let context = {
+            let mut sessions = self.sessions.lock().await;
+            sessions.remove(session_id)
+        };
 
-            // End the reader task asynchronously without waiting for completion
-            if let Some(task) = context.read_task.take() {
-                tokio::spawn(async move {
-                    let _ = task.await;
-                    log_debug!("读取任务已终止");
-                });
-            }
-
+        if let Some(context) = context {
+            Self::cleanup_session(session_id, context).await;
             log_info!("PTY 会话已销毁: session_id={}", session_id);
             Ok(())
         } else {
@@ -532,22 +537,61 @@ impl PtyHandler {
     pub async fn cleanup_all(&self) {
         log_info!("清理所有 PTY 会话");
 
-        let mut sessions = self.sessions.lock().await;
-        for (session_id, mut context) in sessions.drain() {
-            log_info!("清理会话: {}", session_id);
-
-            // Terminate the PTY process
-            if let Ok(mut session) = context.session.try_lock() {
-                let _ = session.kill();
+        const REGISTRY_LOCK_TIMEOUT: Duration = Duration::from_secs(1);
+        let contexts = match time::timeout(REGISTRY_LOCK_TIMEOUT, self.sessions.lock()).await {
+            Ok(mut sessions) => sessions.drain().collect::<Vec<_>>(),
+            Err(_) => {
+                log_error!("清理 PTY 会话超时: 无法获取会话表锁");
+                return;
             }
+        };
 
-            // Wait for the reader task to finish
-            if let Some(task) = context.read_task.take() {
-                let _ = task.await;
-            }
+        for (session_id, context) in contexts {
+            Self::cleanup_session(&session_id, context).await;
         }
 
         log_info!("所有 PTY 会话已清理");
+    }
+
+    async fn cleanup_session(session_id: &str, mut context: PtySessionContext) {
+        const SESSION_LOCK_TIMEOUT: Duration = Duration::from_secs(1);
+        const READER_TASK_TIMEOUT: Duration = Duration::from_secs(2);
+
+        log_info!("清理会话: {}", session_id);
+
+        // Kill by session ID before taking the Tokio mutex. This remains effective
+        // even if a reader/resize path is holding the session lock.
+        if let Some(process_id) = context.process_id {
+            let killed = kill_process_session(process_id);
+            log_debug!(
+                "已终止 PTY 进程会话: session_id={}, leader_pid={}, process_count={}",
+                session_id,
+                process_id,
+                killed
+            );
+        }
+
+        match time::timeout(SESSION_LOCK_TIMEOUT, context.session.lock()).await {
+            Ok(mut session) => {
+                let _ = session.kill();
+            }
+            Err(_) => {
+                log_error!(
+                    "回收 PTY 子进程超时: session_id={} (process tree already signalled)",
+                    session_id
+                );
+            }
+        }
+
+        // Close the writer before waiting so the reader can observe PTY shutdown.
+        drop(context.writer);
+
+        if let Some(mut task) = context.read_task.take() {
+            if time::timeout(READER_TASK_TIMEOUT, &mut task).await.is_err() {
+                log_error!("读取任务退出超时，强制取消: session_id={}", session_id);
+                task.abort();
+            }
+        }
     }
 
     /// Check whether any sessions are active
@@ -626,5 +670,47 @@ impl ModuleHandler for PtyHandler {
                 )))
             }
         }
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn cleanup_all_is_bounded_with_a_live_child_process() {
+        let handler = PtyHandler::new();
+        let shell_args = vec![
+            "-c".to_string(),
+            "set -m; trap '' HUP TERM; sleep 30 & wait".to_string(),
+        ];
+
+        handler
+            .handle_init(
+                Some("custom:/bin/sh".to_string()),
+                Some(shell_args),
+                None,
+                None,
+                Some(80),
+                Some(24),
+            )
+            .await
+            .expect("create PTY session");
+
+        let process_id = {
+            let sessions = handler.sessions.lock().await;
+            sessions
+                .values()
+                .next()
+                .and_then(|context| context.process_id)
+                .expect("PTY process id")
+        };
+
+        time::timeout(Duration::from_secs(4), handler.cleanup_all())
+            .await
+            .expect("cleanup_all must not wait forever for the PTY reader");
+
+        assert!(!handler.has_sessions().await);
+        assert_ne!(unsafe { libc::kill(process_id as libc::pid_t, 0) }, 0);
     }
 }
