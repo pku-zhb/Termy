@@ -268,7 +268,3 @@ function cloneActivity(activity: CodexSessionActivity): CodexSessionActivity {
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value));
 }
-
-export function isTerminalViewportAtScrollableBottom(viewportY: number, baseY: number): boolean {
-  return baseY > 0 && viewportY >= baseY;
-}

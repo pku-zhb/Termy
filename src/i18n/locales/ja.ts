@@ -46,6 +46,7 @@ export const ja: TranslationKeys = {
       waitingPrompt: '現在のプロンプトを待機中...',
       waitingProgress: 'Codex が処理中...',
       noProgress: 'このターンには公開された進捗がありません。',
+      completed: '完了',
       showPanel: 'Codex 進捗パネルを表示',
       hidePanel: 'Codex 進捗パネルを非表示',
     },
@@ -74,6 +75,7 @@ export const ja: TranslationKeys = {
 
   commands: {
     openTerminal: 'Termyターミナルを開く',
+    toggleCodexActivityPanel: 'Codex 進捗パネルを切り替え',
     showChangelog: 'Termy: 更新ログを表示',
     terminalSearch: 'ターミナル: 検索',
     terminalClear: 'ターミナル: 画面をクリア',

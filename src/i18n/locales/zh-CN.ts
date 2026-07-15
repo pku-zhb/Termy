@@ -46,6 +46,7 @@ export const zhCN: TranslationKeys = {
       waitingPrompt: '等待当前 prompt...',
       waitingProgress: 'Codex 正在处理...',
       noProgress: '本轮没有公开阶段进度。',
+      completed: '已完成',
       showPanel: '显示 Codex 进度浮窗',
       hidePanel: '隐藏 Codex 进度浮窗',
     },
@@ -74,6 +75,7 @@ export const zhCN: TranslationKeys = {
 
   commands: {
     openTerminal: '打开Termy终端',
+    toggleCodexActivityPanel: '切换 Codex 进度浮窗',
     showChangelog: 'Termy：显示更新日志',
     terminalSearch: '终端：搜索',
     terminalClear: '终端：清屏',

@@ -46,6 +46,7 @@ export const ru: TranslationKeys = {
       waitingPrompt: 'Ожидание текущего запроса...',
       waitingProgress: 'Codex обрабатывает запрос...',
       noProgress: 'В этом ходе нет публичных обновлений прогресса.',
+      completed: 'Завершено',
       showPanel: 'Показать панель прогресса Codex',
       hidePanel: 'Скрыть панель прогресса Codex',
     },
@@ -74,6 +75,7 @@ export const ru: TranslationKeys = {
 
   commands: {
     openTerminal: 'Открыть терминал Termy',
+    toggleCodexActivityPanel: 'Переключить панель прогресса Codex',
     showChangelog: 'Termy: показать список изменений',
     terminalSearch: 'Терминал: поиск',
     terminalClear: 'Терминал: очистить экран',

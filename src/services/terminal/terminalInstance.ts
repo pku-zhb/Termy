@@ -37,6 +37,11 @@ import {
 } from './claudeCodeTuiSupport';
 import { ClaudeCodeSessionState } from './claudeCodeSessionState';
 import { createTerminalImageAddonOptions } from './terminalImageSupport';
+import {
+  KittyGraphicsProtocolBridge,
+  KittyGraphicsRenderer,
+  TERMY_KITTY_GRAPHICS_OSC,
+} from './kittyGraphicsSupport';
 import { TerminalTitleState } from './terminalTitleState';
 import { resolveTerminalContextMenuAction } from './terminalContextMenuRouter';
 import {
@@ -287,6 +292,8 @@ export class TerminalInstance {
   private sessionRecoveryInProgress = false;
   private pendingControlSequenceText = '';
   private synchronizedOutputCompatibilityState = createSynchronizedOutputCompatibilityState();
+  private kittyGraphicsProtocol = new KittyGraphicsProtocolBridge();
+  private kittyGraphicsRenderer: KittyGraphicsRenderer | null = null;
   private parserDisposables: IDisposable[] = [];
   private domEventCleanups: Array<() => void> = [];
   private hostWindow: Window | null = null;
@@ -333,8 +340,14 @@ export class TerminalInstance {
       this.xterm.loadAddon(this.fitAddon);
       this.xterm.loadAddon(this.searchAddon);
       this.xterm.loadAddon(imageAddon);
+      this.kittyGraphicsRenderer = new KittyGraphicsRenderer(this.xterm);
       
       this.setupClaudeCodeTuiHandlers();
+      this.parserDisposables.push(
+        this.xterm.onResize(() => {
+          this.kittyGraphicsRenderer?.refresh();
+        }),
+      );
       
       debugLog('[Terminal] xterm.js 实例初始化完成');
     } catch (error) {
@@ -760,6 +773,7 @@ export class TerminalInstance {
         this.updateTheme();
         this.syncBackgroundLayerStyles();
         this.fit();
+        this.kittyGraphicsRenderer?.refresh();
       })
       .catch((error) => {
         errorLog('[Terminal] Renderer refresh failed:', error);
@@ -787,6 +801,7 @@ export class TerminalInstance {
       this.xterm.open(container);
       this.setupDomEventHandlers(container);
       this.syncBackgroundLayerStyles();
+      this.kittyGraphicsRenderer?.refresh();
     } catch (error) {
       errorLog('[Terminal] xterm.open() failed during appearance refresh:', error);
       return;
@@ -797,6 +812,7 @@ export class TerminalInstance {
         this.updateTheme();
         this.syncBackgroundLayerStyles();
         this.fit();
+        this.kittyGraphicsRenderer?.refresh();
         if (wasFocused) {
           this.focus();
         }
@@ -925,9 +941,10 @@ export class TerminalInstance {
         rawText,
         this.synchronizedOutputCompatibilityState,
       );
-      this.extractCwdFromOutput(filteredText);
-      this.updateWin32InputMode(filteredText);
-      this.xterm.write(filteredText);
+      const terminalText = this.kittyGraphicsProtocol.transformOutput(filteredText);
+      this.extractCwdFromOutput(terminalText);
+      this.updateWin32InputMode(terminalText);
+      this.xterm.write(terminalText);
     });
     
     // Handle exit events (session-level)
@@ -1103,6 +1120,16 @@ export class TerminalInstance {
       }),
       this.xterm.parser.registerOscHandler(11, (data) => {
         return this.handleDefaultColorQuery(data, 11);
+      }),
+      this.xterm.parser.registerOscHandler(TERMY_KITTY_GRAPHICS_OSC, (data) => {
+        const result = this.kittyGraphicsProtocol.consumeMarker(data, {
+          x: this.xterm.buffer.active.cursorX,
+          y: this.xterm.buffer.active.cursorY,
+        });
+        if (result.action) {
+          this.kittyGraphicsRenderer?.apply(result.action);
+        }
+        return result.handled;
       }),
       this.xterm.parser.registerCsiHandler({ prefix: '>', final: 'm' }, (params) => {
         if (params[0] !== 4) {
@@ -1321,6 +1348,7 @@ export class TerminalInstance {
 
       this.fitAddon.fit();
       this.sendResize(this.xterm.cols, this.xterm.rows);
+      this.kittyGraphicsRenderer?.refresh();
     } catch (error) {
       debugWarn('[Terminal] Fit failed:', error);
     }
@@ -1425,6 +1453,9 @@ export class TerminalInstance {
     this.isDestroyed = true;
 
     this.clearPendingInput();
+    this.kittyGraphicsProtocol.reset();
+    this.kittyGraphicsRenderer?.dispose();
+    this.kittyGraphicsRenderer = null;
     this.promptMarkers = [];
     this.commandMarkers = [];
 
@@ -1489,6 +1520,7 @@ export class TerminalInstance {
       }
       this.xterm.open(container);
       this.syncBackgroundLayerStyles();
+      this.kittyGraphicsRenderer?.refresh();
     } catch (error) {
       errorLog('[Terminal] xterm.open() failed:', error);
       throw error;
@@ -1505,6 +1537,7 @@ export class TerminalInstance {
         .then(() => {
           this.syncBackgroundLayerStyles();
           this.fit();
+          this.kittyGraphicsRenderer?.refresh();
         })
         .catch((error) => {
           const errorMsg = error instanceof Error ? error.message : String(error);
@@ -2895,6 +2928,8 @@ export class TerminalInstance {
       }
 
       // Clear xterm.js scrollback and state
+      this.kittyGraphicsProtocol.reset();
+      this.kittyGraphicsRenderer?.clear();
       this.xterm.clear();
       this.xterm.reset();
       this.xterm.clearSelection();

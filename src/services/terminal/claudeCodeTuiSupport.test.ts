@@ -12,14 +12,21 @@ import {
 } from './claudeCodeTuiSupport.ts';
 
 test('buildClaudeCodeTuiEnv declares terminal capabilities without IDE identity', () => {
-  const env = buildClaudeCodeTuiEnv({});
+  const env = buildClaudeCodeTuiEnv({}, {}, 'darwin');
 
-  assert.equal(env.TERM, 'xterm-256color');
+  assert.equal(env.TERM, 'mlterm-256color');
+  assert.equal(env.KITTY_WINDOW_ID, '1');
   assert.equal('TERM_PROGRAM' in env, false);
   assert.equal('TERM_PROGRAM_VERSION' in env, false);
   assert.equal(env.COLORTERM, 'truecolor');
   assert.equal(env.FORCE_HYPERLINK, '1');
   assert.equal('LC_TERMINAL' in env, false);
+});
+
+test('buildClaudeCodeTuiEnv keeps the portable xterm identity outside macOS', () => {
+  const env = buildClaudeCodeTuiEnv({}, {}, 'linux');
+
+  assert.equal(env.TERM, 'xterm-256color');
 });
 
 test('buildClaudeCodeTuiEnv preserves user overrides', () => {
@@ -32,12 +39,14 @@ test('buildClaudeCodeTuiEnv preserves user overrides', () => {
       TERM: 'screen-256color',
       TERM_PROGRAM: 'custom-terminal',
       COLORTERM: 'ansi',
+      KITTY_WINDOW_ID: 'custom-window',
     },
   );
 
   assert.equal(env.TERM, 'screen-256color');
   assert.equal(env.TERM_PROGRAM, 'custom-terminal');
   assert.equal(env.COLORTERM, 'ansi');
+  assert.equal(env.KITTY_WINDOW_ID, 'custom-window');
   assert.equal(env.FORCE_HYPERLINK, '0');
 });
 

@@ -57,6 +57,7 @@ export interface TranslationKeys {
       waitingPrompt: string;
       waitingProgress: string;
       noProgress: string;
+      completed: string;
       showPanel: string;
       hidePanel: string;
     };
@@ -86,6 +87,7 @@ export interface TranslationKeys {
   // Commands
   commands: {
     openTerminal: string;
+    toggleCodexActivityPanel: string;
     showChangelog: string;
     terminalSearch: string;
     terminalClear: string;

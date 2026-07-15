@@ -119,9 +119,12 @@ export class AgentMonitor {
     pill.createSpan('termy-agent-pill-count').setText(String(count));
 
     const meters = pill.createDiv('termy-agent-credit-meters');
-    appendMeter(meters, credit ? usedPercent(credit.fiveHourRemainingPercent) : null, '5h usage', ['is-usage']);
-    appendMeter(meters, credit ? resetElapsedPercent(credit.fiveHourResetAtMs, 5 * 60 * 60 * 1000) : null, '5h reset', ['is-reset']);
-    appendMeter(meters, credit ? usedPercent(credit.weeklyRemainingPercent) : null, 'weekly usage', ['is-usage', 'is-weekly-start']);
+    if (kind === 'claude') {
+      appendMeter(meters, credit ? usedPercent(credit.fiveHourRemainingPercent) : null, '5h usage', ['is-usage']);
+      appendMeter(meters, credit ? resetElapsedPercent(credit.fiveHourResetAtMs, 5 * 60 * 60 * 1000) : null, '5h reset', ['is-reset']);
+    }
+    const weeklyUsageClasses = kind === 'claude' ? ['is-usage', 'is-weekly-start'] : ['is-usage'];
+    appendMeter(meters, credit ? usedPercent(credit.weeklyRemainingPercent) : null, 'weekly usage', weeklyUsageClasses);
     appendMeter(meters, credit ? resetElapsedPercent(credit.weeklyResetAtMs, 7 * 24 * 60 * 60 * 1000) : null, 'weekly reset', ['is-reset']);
   }
 
@@ -150,11 +153,14 @@ function creditTooltip(kind: AgentKind, credit: AgentCreditStatus): string {
     return `${name}: unlimited · ${credit.source}`;
   }
 
-  return [
+  const lines = [
     `${name} · ${credit.source}`,
-    `5h usage ${displayUsedPercent(credit.fiveHourRemainingPercent)}, reset ${displayResetTime(credit.fiveHourResetAtMs)}`,
-    `weekly usage ${displayUsedPercent(credit.weeklyRemainingPercent)}, reset ${displayResetTime(credit.weeklyResetAtMs)}`,
-  ].join('\n');
+  ];
+  if (kind === 'claude') {
+    lines.push(`5h usage ${displayUsedPercent(credit.fiveHourRemainingPercent)}, reset ${displayResetTime(credit.fiveHourResetAtMs)}`);
+  }
+  lines.push(`weekly usage ${displayUsedPercent(credit.weeklyRemainingPercent)}, reset ${displayResetTime(credit.weeklyResetAtMs)}`);
+  return lines.join('\n');
 }
 
 function displayUsedPercent(remainingPercent: number | null): string {

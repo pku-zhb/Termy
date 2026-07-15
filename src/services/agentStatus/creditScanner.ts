@@ -1,4 +1,5 @@
 import { requestUrl } from 'obsidian';
+import { classifyCodexRateLimitWindows } from './codexRateLimits.ts';
 import type { AgentStatusRuntime } from './runtime.ts';
 import type { AgentCreditSnapshot, AgentCreditStatus } from './types.ts';
 
@@ -254,15 +255,14 @@ export class CreditScanner {
   }
 
   private codexStatusFromRateLimits(rateLimits: Record<string, unknown>): AgentCreditStatus {
-    const primary = rateLimits.primary as Record<string, unknown> | undefined;
-    const secondary = rateLimits.secondary as Record<string, unknown> | undefined;
+    const { fiveHour, weekly } = classifyCodexRateLimitWindows(rateLimits);
     const credits = rateLimits.credits as Record<string, unknown> | undefined;
 
     return {
-      fiveHourRemainingPercent: remainingPercentFromUsedPercent(primary?.usedPercent),
-      weeklyRemainingPercent: remainingPercentFromUsedPercent(secondary?.usedPercent),
-      fiveHourResetAtMs: dateFromUnixSeconds(primary?.resetsAt),
-      weeklyResetAtMs: dateFromUnixSeconds(secondary?.resetsAt),
+      fiveHourRemainingPercent: remainingPercentFromUsedPercent(fiveHour?.usedPercent),
+      weeklyRemainingPercent: remainingPercentFromUsedPercent(weekly?.usedPercent),
+      fiveHourResetAtMs: dateFromUnixSeconds(fiveHour?.resetsAt),
+      weeklyResetAtMs: dateFromUnixSeconds(weekly?.resetsAt),
       unlimited: boolValue(credits?.unlimited) ?? false,
       source: 'codex-app-server',
     };

@@ -1697,6 +1697,40 @@
   left: 0;
   opacity: var(--terminal-text-opacity, 1);
 }
+/* @xterm/addon-image appends its own canvas after the renderer canvases. Termy
+   carries the xterm styles locally, so keep the addon's layer in the same
+   absolute canvas stack; otherwise it remains an in-flow canvas underneath the
+   opaque text layer and Sixel images reserve space but appear blank. */
+.terminal-container .xterm .xterm-screen .xterm-image-layer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 0;
+  pointer-events: none;
+}
+/* Minimal Kitty graphics layer used by Codex pets. It shares the renderer's
+   z-index but is appended after the opaque text canvas, preserving the cell
+   backgrounds visible through transparent PNG pixels. */
+.terminal-container .xterm .xterm-screen .termy-kitty-image-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+.terminal-container .xterm .xterm-screen .termy-kitty-image {
+  position: absolute;
+  display: block;
+  max-width: none;
+  max-height: none;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  object-fit: fill;
+  image-rendering: pixelated;
+  pointer-events: none;
+  user-select: none;
+}
 /* When there is a background image, the Canvas renderer also needs a transparent background */
 .terminal-container.has-background-image .xterm-canvas,
 .terminal-container.has-background-image canvas {
@@ -2487,7 +2521,7 @@
   display: flex;
   flex-direction: column;
   height: auto;
-  max-height: 50%;
+  max-height: 100%;
   min-height: 0;
   overflow: hidden;
   border-bottom: 1px solid var(--background-modifier-border);
@@ -2536,6 +2570,10 @@
   overflow: hidden;
 }
 
+.termy-codex-activity-row.is-complete {
+  flex: 0 0 auto;
+}
+
 .termy-codex-activity-row + .termy-codex-activity-row {
   margin-top: 10px;
   padding-top: 10px;
@@ -2569,6 +2607,10 @@
 }
 
 .termy-codex-activity-placeholder {
+  color: var(--text-muted);
+}
+
+.termy-codex-activity-completion {
   color: var(--text-muted);
 }
 

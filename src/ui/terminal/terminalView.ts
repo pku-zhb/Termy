@@ -60,7 +60,6 @@ import {
 } from '../../services/terminal/terminalRestoreState';
 import {
   CodexSessionActivityParser,
-  isTerminalViewportAtScrollableBottom,
   type CodexSessionActivity,
 } from '../../services/terminal/codexSessionActivity';
 import {
@@ -337,7 +336,6 @@ export class TerminalView extends ItemView {
   private codexActivityRenderKey = '';
   private readonly codexActivityParser = new CodexSessionActivityParser();
   private readonly codexTranscriptPathCache = new Map<string, string>();
-  private codexActivityScrollDisposable: XtermDisposable | null = null;
   private codexActivityMarkdownComponent: Component | null = null;
   private codexActivityEnabled: boolean;
   private terminalContainer: HTMLElement | null = null;
@@ -470,7 +468,7 @@ export class TerminalView extends ItemView {
     // terminalContainer 作为多个终端 pane 的父容器
     this.terminalContainer = container.createDiv('terminal-container');
 
-    // 覆盖在终端上半部，不参与布局；工具调用仍只留在下方完整终端中。
+    // 覆盖在终端上方，不参与布局；内容可扩展至完整终端高度。
     this.codexActivityEl = this.terminalContainer.createDiv('termy-codex-activity');
     if (this.codexActivityEnabled) {
       this.startCodexActivityPolling();
@@ -599,8 +597,6 @@ export class TerminalView extends ItemView {
     this.titleChangeCleanup = null;
     this.searchStateCleanup?.();
     this.searchStateCleanup = null;
-    this.codexActivityScrollDisposable?.dispose();
-    this.codexActivityScrollDisposable = null;
     this.agentMonitor?.dispose();
     this.agentMonitor = null;
     this.agentStatusUnsubscribe?.();
@@ -1615,8 +1611,7 @@ export class TerminalView extends ItemView {
       return;
     }
 
-    panel.toggleClass('has-session', Boolean(sessionId));
-    this.updateCodexActivityVisibility();
+    panel.toggleClass('is-visible', Boolean(sessionId));
 
     const renderKey = sessionId
       ? JSON.stringify([sessionId, activity])
@@ -1675,7 +1670,21 @@ export class TerminalView extends ItemView {
       }
       void Promise.all(renderPromises).then(() => this.scrollCodexActivityProgressToBottom(progress));
     }
-    this.updateCodexActivityVisibility();
+
+    if (state === 'complete') {
+      const completionRow = body.createDiv('termy-codex-activity-row is-complete');
+      const completionLabel = completionRow.createSpan({
+        cls: 'termy-codex-activity-label',
+        text: '✅',
+      });
+      const completedText = t('terminal.sessionActivity.completed');
+      completionLabel.title = completedText;
+      completionLabel.setAttribute('aria-label', completedText);
+      completionRow.createDiv({
+        cls: 'termy-codex-activity-completion',
+        text: completedText,
+      });
+    }
   }
 
   private scrollCodexActivityProgressToBottom(progress: HTMLElement): void {
@@ -1710,20 +1719,6 @@ export class TerminalView extends ItemView {
     }
     this.codexActivityMarkdownComponent = null;
     this.removeChild(component);
-  }
-
-  private updateCodexActivityVisibility(): void {
-    const panel = this.codexActivityEl;
-    const terminal = this.terminalInstance;
-    if (!panel) {
-      return;
-    }
-
-    const buffer = terminal?.getXterm().buffer.active;
-    const atBottom = buffer
-      ? isTerminalViewportAtScrollableBottom(buffer.viewportY, buffer.baseY)
-      : false;
-    panel.toggleClass('is-visible', panel.hasClass('has-session') && atBottom);
   }
 
   private resolveTabAgentStatus(tab: TerminalTabEntry): TerminalTabAgentStatus | null {
@@ -1859,11 +1854,6 @@ export class TerminalView extends ItemView {
       }
     });
 
-    this.codexActivityScrollDisposable = terminal.getXterm().onScroll(() => {
-      this.updateCodexActivityVisibility();
-    });
-    this.updateCodexActivityVisibility();
-
     terminal.setOnNewTerminal(() => {
       void this.createNewTerminal();
     });
@@ -1896,8 +1886,6 @@ export class TerminalView extends ItemView {
     this.titleChangeCleanup = null;
     this.searchStateCleanup?.();
     this.searchStateCleanup = null;
-    this.codexActivityScrollDisposable?.dispose();
-    this.codexActivityScrollDisposable = null;
   }
 
   private disposeTerminalLinkProvider(terminal: TerminalInstance): void {

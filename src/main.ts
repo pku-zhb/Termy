@@ -447,6 +447,16 @@ export default class TerminalPlugin extends Plugin {
       }
     });
 
+    this.addCommand({
+      id: 'toggle-codex-activity-panel',
+      name: t('commands.toggleCodexActivityPanel'),
+      callback: () => {
+        void this.setCodexActivityPanelEnabled(!this.settings.showCodexActivityPanel)
+          .catch((error) => {
+            errorLog('[TerminalPlugin] Failed to toggle Codex activity panel:', error);
+          });
+      },
+    });
 
     // Clear screen
     this.addCommand({

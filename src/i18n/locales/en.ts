@@ -46,6 +46,7 @@ export const en: TranslationKeys = {
       waitingPrompt: 'Waiting for the current prompt...',
       waitingProgress: 'Codex is processing...',
       noProgress: 'No public progress updates for this turn.',
+      completed: 'Completed',
       showPanel: 'Show progress panel',
       hidePanel: 'Hide progress panel',
     },
@@ -74,6 +75,7 @@ export const en: TranslationKeys = {
 
   commands: {
     openTerminal: 'Open terminal',
+    toggleCodexActivityPanel: 'Toggle progress panel',
     showChangelog: 'Termy: show changelog',
     terminalSearch: 'Terminal: search',
     terminalClear: 'Terminal: clear screen',

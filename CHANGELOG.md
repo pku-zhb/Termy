@@ -5,6 +5,20 @@ All notable changes to Termy will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.9] - 2026-07-15
+
+### Added
+- Added a command-palette action for showing or hiding the Codex activity overlay.
+- Added Kitty graphics direct-PNG compatibility for Codex Pets while retaining Sixel support.
+
+### Changed
+- Let the Codex activity overlay remain visible while scrolling and grow with its content up to the full terminal height instead of half the screen.
+- Show a separate completion row after Codex finishes without copying the final answer into the overlay.
+- Classify Codex quota windows by their reported duration and show the currently available weekly quota without a misleading five-hour meter.
+
+### Fixed
+- Positioned Sixel and Kitty image layers inside the xterm canvas stack so terminal images remain visible with transparent backgrounds.
+
 ## [1.5.8] - 2026-07-15
 
 ### Fixed

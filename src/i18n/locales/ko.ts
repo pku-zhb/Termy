@@ -46,6 +46,7 @@ export const ko: TranslationKeys = {
       waitingPrompt: '현재 프롬프트 대기 중...',
       waitingProgress: 'Codex 처리 중...',
       noProgress: '이 턴에는 공개된 진행 상황이 없습니다.',
+      completed: '완료됨',
       showPanel: 'Codex 진행 패널 표시',
       hidePanel: 'Codex 진행 패널 숨기기',
     },
@@ -74,6 +75,7 @@ export const ko: TranslationKeys = {
 
   commands: {
     openTerminal: 'Termy 터미널 열기',
+    toggleCodexActivityPanel: 'Codex 진행 패널 전환',
     showChangelog: 'Termy: 변경 로그 보기',
     terminalSearch: '터미널: 검색',
     terminalClear: '터미널: 화면 지우기',

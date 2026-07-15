@@ -142,14 +142,6 @@ test('tracks completion, avoids duplicate final text, and resets for a new turn'
   });
 });
 
-test('shows activity only at the bottom of an actually scrollable xterm buffer', async () => {
-  const { isTerminalViewportAtScrollableBottom } = await import('./codexSessionActivity.ts');
-  assert.equal(isTerminalViewportAtScrollableBottom(0, 0), false);
-  assert.equal(isTerminalViewportAtScrollableBottom(120, 120), true);
-  assert.equal(isTerminalViewportAtScrollableBottom(121, 120), true);
-  assert.equal(isTerminalViewportAtScrollableBottom(119, 120), false);
-});
-
 test('handles chunk boundaries and a tail that starts inside a JSONL record', () => {
   const parser = new CodexSessionActivityParser();
   const promptLine = line('response_item', {

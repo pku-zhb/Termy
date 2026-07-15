@@ -19,9 +19,14 @@ export interface RgbColorLike {
 export function buildClaudeCodeTuiEnv(
   parentEnv: EnvLike = process.env,
   userEnv: Record<string, string> = {},
+  platform: NodeJS.Platform = process.platform,
 ): Record<string, string> {
   const env: Record<string, string> = {
-    TERM: 'xterm-256color',
+    // Keep Sixel available through xterm's image addon while advertising the
+    // Kitty graphics compatibility layer. Codex prioritizes KITTY_WINDOW_ID,
+    // which avoids its Sixel redraw path erasing the composer's background.
+    TERM: platform === 'darwin' ? 'mlterm-256color' : 'xterm-256color',
+    KITTY_WINDOW_ID: parentEnv.KITTY_WINDOW_ID || '1',
     COLORTERM: parentEnv.COLORTERM || 'truecolor',
     FORCE_HYPERLINK: parentEnv.FORCE_HYPERLINK || '1',
   };
