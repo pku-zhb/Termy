@@ -49,6 +49,7 @@ import {
 } from '../../services/terminal/foregroundStatus';
 import {
   matchDirectTerminalAgentClients,
+  matchUniqueDirectAgentClientsByForegroundPid,
   type DirectTerminalAgentMatchOptions,
 } from '../../services/terminal/terminalAgentMatching';
 import {
@@ -1009,6 +1010,18 @@ export class TerminalView extends ItemView {
   private refreshRememberedAgentsFromSnapshot(): boolean {
     let changed = false;
     for (const tab of this.tabs) {
+      const foreground = this.foregroundByTerminal.get(tab.terminal) ?? tab.terminal.getForeground();
+      const wrappedAgentKind = tab.status === 'none'
+        ? matchUniqueDirectAgentClientsByForegroundPid(
+          this.latestAgentSnapshot?.clients ?? [],
+          foreground?.pid,
+        )[0]?.kind ?? null
+        : null;
+      if (wrappedAgentKind && tab.status === 'none') {
+        tab.status = wrappedAgentKind;
+        changed = true;
+      }
+
       const client = this.matchingAgentClientsForTab(tab, RESTORE_AGENT_MATCH_OPTIONS).find((candidate) =>
         (candidate.kind === 'claude' || candidate.kind === 'codex') && candidate.agentSessionId);
       if (!client?.agentSessionId) {
@@ -1017,9 +1030,6 @@ export class TerminalView extends ItemView {
 
       if (tab.lastKnownAgentKind !== client.kind || tab.lastKnownAgentSessionId !== client.agentSessionId) {
         this.rememberAgent(tab, client.kind, client.agentSessionId);
-        if (tab.status === 'none') {
-          tab.status = client.kind;
-        }
         changed = true;
       }
     }

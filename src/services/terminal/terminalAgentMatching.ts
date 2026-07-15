@@ -36,12 +36,18 @@ export function matchDirectTerminalAgentClients(
       && (!input.lastKnownAgentKind || client.kind === input.lastKnownAgentKind));
   };
 
+  const pid = input.foreground?.pid ?? null;
   if (input.status !== 'claude' && input.status !== 'codex') {
+    if (input.status === 'none' && pid) {
+      const wrappedMatches = matchUniqueDirectAgentClientsByForegroundPid(input.clients, pid);
+      if (wrappedMatches.length > 0) {
+        return wrappedMatches;
+      }
+    }
     return rememberedMatches();
   }
 
   const kindClients = input.clients.filter((client) => client.kind === input.status);
-  const pid = input.foreground?.pid ?? null;
   if (pid) {
     const pidMatches = kindClients.filter((client) =>
       client.pid === pid
@@ -61,6 +67,28 @@ export function matchDirectTerminalAgentClients(
 
   const localClients = kindClients.filter((client) => !client.surfaceId);
   return allowSingleLocalFallback && localClients.length === 1 ? localClients : [];
+}
+
+/**
+ * Match an agent launched below an otherwise unknown foreground wrapper. A
+ * unique kind is required so an arbitrary process group can never choose
+ * between Claude and Codex, and tmux-owned clients stay on the tmux path.
+ */
+export function matchUniqueDirectAgentClientsByForegroundPid(
+  clients: AgentClient[],
+  foregroundPid: number | null | undefined,
+): AgentClient[] {
+  if (!foregroundPid) {
+    return [];
+  }
+
+  const matches = clients.filter((client) =>
+    !client.surfaceId
+    && (client.pid === foregroundPid
+      || client.parentPid === foregroundPid
+      || client.processGroupId === foregroundPid));
+  const kinds = new Set(matches.map((client) => client.kind));
+  return kinds.size === 1 ? matches : [];
 }
 
 function normalizeAgentSessionId(value: string | null | undefined): string | null {
