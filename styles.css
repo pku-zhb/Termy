@@ -2443,6 +2443,11 @@
   margin-left: 2px;
 }
 
+/* Keep Claude credit collection available, but hide the retired subscription meters. */
+.termy-agent-pill.is-claude .termy-agent-credit-meters {
+  display: none;
+}
+
 .termy-agent-credit-meter {
   position: relative;
   display: inline-block;
@@ -2721,6 +2726,41 @@
 img.termy-tab-status-icon {
   object-fit: contain;
   border-radius: 2px;
+}
+.termy-tab-status-wrapper {
+  position: relative;
+  overflow: visible;
+}
+.termy-tab-status-wrapper-base {
+  display: block;
+  width: 14px;
+  height: 14px;
+  object-fit: contain;
+  border-radius: 2px;
+}
+.termy-tab-status-badge {
+  position: absolute;
+  right: -3px;
+  bottom: -2px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 8px;
+  height: 8px;
+  box-sizing: border-box;
+  border: 1px solid var(--background-primary);
+  border-radius: 999px;
+  color: #fff;
+  font-family: var(--font-interface);
+  font-size: 6px;
+  font-weight: 800;
+  line-height: 1;
+}
+.termy-tab-status-wrapper.is-claudex .termy-tab-status-badge {
+  background-color: var(--color-cyan, #0891b2);
+}
+.termy-tab-status-wrapper.is-claude3 .termy-tab-status-badge {
+  background-color: var(--color-purple, #7c3aed);
 }
 .termy-tab-label {
   overflow: hidden;

@@ -58,6 +58,40 @@ test('matchDirectTerminalAgentClients matches wrapped Codex by parent pid', () =
   );
 });
 
+test('matchDirectTerminalAgentClients maps Claude wrapper visuals to Claude clients', () => {
+  const current = client({
+    kind: 'claude',
+    pid: 16767,
+    parentPid: 16722,
+    processGroupId: 16722,
+    agentSessionId: 'current-session',
+  });
+
+  for (const status of ['claudex', 'claude3'] as const) {
+    assert.deepEqual(
+      matchDirectTerminalAgentClients({
+        status,
+        foreground: { name: 'python3', cmdline: `python3 /Users/example/.local/bin/${status}`, pid: 16722 },
+        clients: [current],
+        lastKnownAgentKind: 'claude',
+        lastKnownAgentSessionId: 'current-session',
+      }),
+      [current],
+    );
+  }
+
+  assert.deepEqual(
+    matchDirectTerminalAgentClients({
+      status: 'claude3',
+      foreground: null,
+      clients: [current],
+      lastKnownAgentKind: 'claude',
+      lastKnownAgentSessionId: 'current-session',
+    }),
+    [current],
+  );
+});
+
 test('matchDirectTerminalAgentClients infers Claude below an unknown foreground wrapper', () => {
   const current = client({
     kind: 'claude',

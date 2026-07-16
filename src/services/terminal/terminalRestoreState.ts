@@ -3,11 +3,13 @@ type OsModule = typeof import('os');
 type PathModule = typeof import('path');
 
 export type RestorableAgentKind = 'claude' | 'codex';
+export type ClaudeAgentLauncher = 'claude' | 'claudex' | 'claude3';
 
 export interface RestoredTerminalTab {
   customName: string | null;
   cwd: string | null;
   agentKind: RestorableAgentKind | null;
+  agentLauncher: ClaudeAgentLauncher | null;
   agentSessionId: string | null;
   title: string | null;
   updatedAtMs: number;
@@ -137,22 +139,23 @@ export class TerminalRestoreStore {
 
 export function hasRestorableAgentTabs(snapshot: TerminalRestoreSnapshot): boolean {
   return snapshot.tabs.some((tab) =>
-    (tab.agentKind === 'claude' || tab.agentKind === 'codex')
-    && tab.agentSessionId !== null);
+    tab.agentKind === 'claude'
+    || (tab.agentKind === 'codex' && tab.agentSessionId !== null));
 }
 
 export function restoredAgentCommand(
   agentKind: RestorableAgentKind,
+  agentLauncher: ClaudeAgentLauncher | null,
   agentSessionId: string | null,
   cwd?: string | null,
 ): string | null {
+  if (agentKind === 'claude') {
+    return `${agentLauncher ?? 'claude'} agents`;
+  }
+
   const sessionId = normalizeString(agentSessionId);
   if (!sessionId) {
     return null;
-  }
-
-  if (agentKind === 'claude') {
-    return `claude --resume ${shellQuote(sessionId)}`;
   }
 
   const restoredCwd = normalizeString(cwd);
@@ -239,7 +242,12 @@ function normalizeTab(value: unknown): RestoredTerminalTab | null {
   const customName = normalizeNullableString(value.customName);
   const cwd = normalizeNullableString(value.cwd);
   const agentKind = normalizeAgentKind(value.agentKind);
-  const agentSessionId = normalizeNullableString(value.agentSessionId ?? value.sessionId);
+  const agentLauncher = agentKind === 'claude'
+    ? normalizeClaudeAgentLauncher(value.agentLauncher) ?? 'claude'
+    : null;
+  const agentSessionId = agentKind === 'claude'
+    ? null
+    : normalizeNullableString(value.agentSessionId ?? value.sessionId);
   const title = normalizeNullableString(value.title);
   const updatedAtMs = typeof value.updatedAtMs === 'number' && Number.isFinite(value.updatedAtMs)
     ? value.updatedAtMs
@@ -253,6 +261,7 @@ function normalizeTab(value: unknown): RestoredTerminalTab | null {
     customName,
     cwd,
     agentKind,
+    agentLauncher,
     agentSessionId,
     title,
     updatedAtMs,
@@ -275,6 +284,10 @@ function normalizeIndex(value: unknown, count: number): number {
 
 function normalizeAgentKind(value: unknown): RestorableAgentKind | null {
   return value === 'claude' || value === 'codex' ? value : null;
+}
+
+function normalizeClaudeAgentLauncher(value: unknown): ClaudeAgentLauncher | null {
+  return value === 'claude' || value === 'claudex' || value === 'claude3' ? value : null;
 }
 
 function normalizeNullableString(value: unknown): string | null {

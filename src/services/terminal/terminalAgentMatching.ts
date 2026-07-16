@@ -1,6 +1,9 @@
 import type { AgentClient, AgentKind } from '../agentStatus/types.ts';
 import type { ForegroundInfo } from '../server/types.ts';
-import type { TerminalTabStatus } from './foregroundStatus.ts';
+import {
+  terminalStatusAgentKind,
+  type TerminalTabStatus,
+} from './foregroundStatus.ts';
 
 export interface DirectTerminalAgentMatchInput {
   status: TerminalTabStatus;
@@ -37,7 +40,8 @@ export function matchDirectTerminalAgentClients(
   };
 
   const pid = input.foreground?.pid ?? null;
-  if (input.status !== 'claude' && input.status !== 'codex') {
+  const agentKind = terminalStatusAgentKind(input.status);
+  if (!agentKind) {
     if (input.status === 'none' && pid) {
       const wrappedMatches = matchUniqueDirectAgentClientsByForegroundPid(input.clients, pid);
       if (wrappedMatches.length > 0) {
@@ -47,7 +51,7 @@ export function matchDirectTerminalAgentClients(
     return rememberedMatches();
   }
 
-  const kindClients = input.clients.filter((client) => client.kind === input.status);
+  const kindClients = input.clients.filter((client) => client.kind === agentKind);
   if (pid) {
     const pidMatches = kindClients.filter((client) =>
       client.pid === pid
