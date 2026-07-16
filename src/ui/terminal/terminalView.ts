@@ -67,6 +67,14 @@ import {
   type CodexSessionActivity,
 } from '../../services/terminal/codexSessionActivity';
 import {
+  collectCodexSessionDescriptors,
+  moveCodexSessionSelection,
+  reconcileCodexSessionSelection,
+  resolveCodexSessionPanelState,
+  type CodexSessionDescriptor,
+  type CodexSessionPanelState,
+} from '../../services/terminal/codexSessionPanel';
+import {
   collectTerminalReferenceCandidatePaths,
   fileUriToPlatformPath,
   findUniqueTerminalEntryByBasename,
@@ -183,6 +191,16 @@ interface RestorableAgentSnapshot {
   launcher: ClaudeAgentLauncher | null;
   sessionId: string | null;
   cwd: string | null;
+}
+
+interface CodexActivitySource {
+  readonly sessionId: string;
+  readonly parser: CodexSessionActivityParser;
+  transcriptPath: string | null;
+  transcriptOffset: number;
+  transcriptLoaded: boolean;
+  nextPathResolveAtMs: number;
+  activity: CodexSessionActivity | null;
 }
 
 const RESTORE_AGENT_MATCH_OPTIONS: DirectTerminalAgentMatchOptions = {
@@ -335,13 +353,9 @@ export class TerminalView extends ItemView {
   private tabBarEl: HTMLElement | null = null;
   private codexActivityEl: HTMLElement | null = null;
   private codexActivityTimer: number | null = null;
-  private codexActivitySessionId: string | null = null;
-  private codexActivityTranscriptPath: string | null = null;
-  private codexActivityTranscriptOffset = 0;
-  private codexActivityTranscriptLoaded = false;
-  private codexActivityNextPathResolveAtMs = 0;
+  private codexActivitySelectedSessionId: string | null = null;
+  private readonly codexActivitySources = new Map<string, CodexActivitySource>();
   private codexActivityRenderKey = '';
-  private readonly codexActivityParser = new CodexSessionActivityParser();
   private readonly codexTranscriptPathCache = new Map<string, string>();
   private codexActivityMarkdownComponent: Component | null = null;
   private codexActivityEnabled: boolean;
@@ -373,22 +387,19 @@ export class TerminalView extends ItemView {
   private readonly closingTabs = new Set<TerminalInstance>();
   private readonly detachLeafWithoutConfirmation: WorkspaceLeaf['detach'];
   private viewCloseConfirmationPromise: Promise<boolean> | null = null;
-  private readonly onCodexActivityEnabledChange: ((enabled: boolean) => void) | null;
 
   constructor(
     leaf: WorkspaceLeaf,
     terminalService: TerminalService | null,
     agentStatusService: AgentStatusService | null = null,
     restoreStore: TerminalRestoreStore | null = null,
-    codexActivityEnabled = true,
-    onCodexActivityEnabledChange: ((enabled: boolean) => void) | null = null,
+    codexActivityEnabled = false,
   ) {
     super(leaf);
     this.terminalService = terminalService;
     this.agentStatusService = agentStatusService;
     this.restoreStore = restoreStore;
     this.codexActivityEnabled = codexActivityEnabled;
-    this.onCodexActivityEnabledChange = onCodexActivityEnabledChange;
     this.fs = window.require('fs') as FsModule;
     const os = window.require('os') as OsModule;
     this.homeDir = os.homedir();
@@ -461,7 +472,7 @@ export class TerminalView extends ItemView {
 
     this.agentMonitor = new AgentMonitor(container, this.agentStatusService, {
       codexActivityEnabled: this.codexActivityEnabled,
-      onCodexActivityToggle: (enabled) => this.setCodexActivityEnabled(enabled, true),
+      onCodexActivityToggle: (enabled) => this.setCodexActivityEnabled(enabled),
     });
     this.bindAgentStatusSnapshot();
 
@@ -475,8 +486,12 @@ export class TerminalView extends ItemView {
     // terminalContainer 作为多个终端 pane 的父容器
     this.terminalContainer = container.createDiv('terminal-container');
 
-    // 覆盖在终端上方，不参与布局；内容可扩展至完整终端高度。
+    // 覆盖终端画布但保留上方的 agent monitor 与内部 tab bar。
     this.codexActivityEl = this.terminalContainer.createDiv('termy-codex-activity');
+    this.codexActivityEl.tabIndex = 0;
+    this.codexActivityEl.setAttribute('role', 'dialog');
+    this.codexActivityEl.setAttribute('aria-label', t('terminal.sessionActivity.sessions'));
+    this.codexActivityEl.addEventListener('keydown', (event) => this.handleCodexActivityKeydown(event));
     if (this.codexActivityEnabled) {
       this.startCodexActivityPolling();
     }
@@ -649,7 +664,7 @@ export class TerminalView extends ItemView {
     this.bindAgentStatusSnapshot();
   }
 
-  setCodexActivityEnabled(enabled: boolean, notify = false): void {
+  setCodexActivityEnabled(enabled: boolean): void {
     const changed = enabled !== this.codexActivityEnabled;
     this.codexActivityEnabled = enabled;
     this.agentMonitor?.setCodexActivityEnabled(enabled);
@@ -657,14 +672,17 @@ export class TerminalView extends ItemView {
     if (changed && this.codexActivityEl) {
       if (enabled) {
         this.startCodexActivityPolling();
+        this.focusCodexActivityPanelSoon();
       } else {
         this.stopCodexActivityPolling();
+        this.focusActiveTerminalSoon();
       }
     }
 
-    if (notify && changed) {
-      this.onCodexActivityEnabledChange?.(enabled);
-    }
+  }
+
+  toggleCodexActivityPanel(): void {
+    this.setCodexActivityEnabled(!this.codexActivityEnabled);
   }
 
   private bindAgentStatusSnapshot(): void {
@@ -1331,7 +1349,14 @@ export class TerminalView extends ItemView {
   setActiveTab(index: number): void {
     if (index < 0 || index >= this.tabs.length) return;
     if (index === this.activeIndex) {
-      this.tabs[index].terminal.focus();
+      if (this.codexActivityEnabled) {
+        if (this.syncCodexActivitySelectionToActiveTab()) {
+          this.refreshCodexActivity();
+        }
+        this.focusCodexActivityPanelSoon();
+      } else {
+        this.tabs[index].terminal.focus();
+      }
       return;
     }
 
@@ -1344,6 +1369,7 @@ export class TerminalView extends ItemView {
 
     const terminal = this.tabs[index].terminal;
     this.terminalInstance = terminal;
+    this.syncCodexActivitySelectionToActiveTab();
     this.bindTerminalInstance(terminal);
     this.updateAppearanceStyles();
     this.setupResizeObserver();
@@ -1351,7 +1377,11 @@ export class TerminalView extends ItemView {
     window.setTimeout(() => {
       if (terminal.isAlive()) {
         terminal.fit();
-        terminal.focus();
+        if (this.codexActivityEnabled) {
+          this.focusCodexActivityPanelSoon();
+        } else {
+          terminal.focus();
+        }
       }
     }, 0);
 
@@ -1500,120 +1530,171 @@ export class TerminalView extends ItemView {
       window.clearInterval(this.codexActivityTimer);
       this.codexActivityTimer = null;
     }
-    this.resetCodexActivitySource(null);
-    this.renderCodexActivityPanel(null, null);
+    this.codexActivitySelectedSessionId = null;
+    this.codexActivitySources.clear();
+    this.codexActivityRenderKey = '';
+    this.renderCodexActivityPanel([]);
   }
 
   private refreshCodexActivity(): void {
     if (!this.codexActivityEnabled) {
       return;
     }
-    const sessionId = this.activeCodexSessionId();
-    if (!sessionId) {
-      if (this.codexActivitySessionId !== null) {
-        this.resetCodexActivitySource(null);
-      }
-      this.renderCodexActivityPanel(null, null);
-      return;
-    }
+    const descriptors = collectCodexSessionDescriptors(this.latestAgentSnapshot?.clients ?? []);
+    const sessionIds = descriptors.map((descriptor) => descriptor.sessionId);
+    const activeSessionId = this.activeCodexSessionId();
+    this.codexActivitySelectedSessionId = reconcileCodexSessionSelection(
+      sessionIds,
+      this.codexActivitySelectedSessionId,
+      activeSessionId,
+    );
 
-    if (sessionId !== this.codexActivitySessionId) {
-      this.resetCodexActivitySource(sessionId);
-    }
-
-    if (!this.codexActivityTranscriptPath) {
-      if (Date.now() >= this.codexActivityNextPathResolveAtMs) {
-        this.codexActivityTranscriptPath = this.resolveCodexTranscriptPath(sessionId);
-        this.codexActivityNextPathResolveAtMs = Date.now() + CODEX_ACTIVITY_PATH_RETRY_MS;
+    for (const sessionId of [...this.codexActivitySources.keys()]) {
+      if (!sessionIds.includes(sessionId)) {
+        this.codexActivitySources.delete(sessionId);
       }
-      if (!this.codexActivityTranscriptPath) {
-        this.renderCodexActivityPanel(sessionId, null);
+    }
+    for (const descriptor of descriptors) {
+      this.refreshCodexActivitySource(this.codexActivitySource(descriptor.sessionId));
+    }
+    this.renderCodexActivityPanel(descriptors);
+  }
+
+  private codexActivitySource(sessionId: string): CodexActivitySource {
+    const existing = this.codexActivitySources.get(sessionId);
+    if (existing) {
+      return existing;
+    }
+    const source: CodexActivitySource = {
+      sessionId,
+      parser: new CodexSessionActivityParser(),
+      transcriptPath: null,
+      transcriptOffset: 0,
+      transcriptLoaded: false,
+      nextPathResolveAtMs: 0,
+      activity: null,
+    };
+    this.codexActivitySources.set(sessionId, source);
+    return source;
+  }
+
+  private refreshCodexActivitySource(source: CodexActivitySource): void {
+    if (!source.transcriptPath) {
+      if (Date.now() >= source.nextPathResolveAtMs) {
+        source.transcriptPath = this.resolveCodexTranscriptPath(source.sessionId);
+        source.nextPathResolveAtMs = Date.now() + CODEX_ACTIVITY_PATH_RETRY_MS;
+      }
+      if (!source.transcriptPath) {
+        source.activity = null;
         return;
       }
     }
 
     try {
-      const stat = this.fs.statSync(this.codexActivityTranscriptPath);
+      const stat = this.fs.statSync(source.transcriptPath);
       if (!stat.isFile()) {
         throw new Error('Codex transcript is not a file');
       }
-      if (stat.size < this.codexActivityTranscriptOffset) {
-        this.codexActivityTranscriptLoaded = false;
-        this.codexActivityTranscriptOffset = 0;
-        this.codexActivityParser.reset();
+      if (stat.size < source.transcriptOffset) {
+        source.transcriptLoaded = false;
+        source.transcriptOffset = 0;
+        source.parser.reset();
       }
 
-      if (!this.codexActivityTranscriptLoaded) {
+      if (!source.transcriptLoaded) {
         const start = Math.max(0, stat.size - CODEX_ACTIVITY_MAX_READ_BYTES);
         const chunk = this.readCodexTranscriptRange(
-          this.codexActivityTranscriptPath,
+          source.transcriptPath,
           start,
           stat.size - start,
         );
-        this.codexActivityParser.reset();
-        this.codexActivityParser.push(chunk, start > 0);
-        this.codexActivityTranscriptOffset = stat.size;
-        this.codexActivityTranscriptLoaded = true;
-      } else if (stat.size > this.codexActivityTranscriptOffset) {
-        const unreadBytes = stat.size - this.codexActivityTranscriptOffset;
+        source.parser.reset();
+        source.parser.push(chunk, start > 0);
+        source.transcriptOffset = stat.size;
+        source.transcriptLoaded = true;
+      } else if (stat.size > source.transcriptOffset) {
+        const unreadBytes = stat.size - source.transcriptOffset;
         if (unreadBytes > CODEX_ACTIVITY_MAX_READ_BYTES) {
           const start = stat.size - CODEX_ACTIVITY_MAX_READ_BYTES;
           const chunk = this.readCodexTranscriptRange(
-            this.codexActivityTranscriptPath,
+            source.transcriptPath,
             start,
             CODEX_ACTIVITY_MAX_READ_BYTES,
           );
-          this.codexActivityParser.reset();
-          this.codexActivityParser.push(chunk, true);
+          source.parser.reset();
+          source.parser.push(chunk, true);
         } else {
           const chunk = this.readCodexTranscriptRange(
-            this.codexActivityTranscriptPath,
-            this.codexActivityTranscriptOffset,
+            source.transcriptPath,
+            source.transcriptOffset,
             unreadBytes,
           );
-          this.codexActivityParser.push(chunk);
+          source.parser.push(chunk);
         }
-        this.codexActivityTranscriptOffset = stat.size;
+        source.transcriptOffset = stat.size;
       }
-
-      this.renderCodexActivityPanel(sessionId, this.codexActivityParser.getActivity());
+      source.activity = source.parser.getActivity();
     } catch (error) {
-      debugLog('[TerminalView] Failed to read Codex session activity:', error);
-      this.codexActivityTranscriptPath = null;
-      this.codexActivityTranscriptLoaded = false;
-      this.codexActivityTranscriptOffset = 0;
-      this.codexActivityNextPathResolveAtMs = Date.now() + CODEX_ACTIVITY_PATH_RETRY_MS;
-      this.renderCodexActivityPanel(sessionId, null);
+      debugLog('[TerminalView] Failed to read Codex session activity:', {
+        sessionId: source.sessionId,
+        error,
+      });
+      source.transcriptPath = null;
+      source.transcriptLoaded = false;
+      source.transcriptOffset = 0;
+      source.nextPathResolveAtMs = Date.now() + CODEX_ACTIVITY_PATH_RETRY_MS;
+      source.activity = null;
     }
   }
 
   private activeCodexSessionId(): string | null {
     const tab = this.tabs[this.activeIndex];
-    if (!tab) {
-      return null;
-    }
-
-    const liveClient = this.matchingAgentClientsForTab(tab, RESTORE_AGENT_MATCH_OPTIONS)
-      .find((client) => client.kind === 'codex' && client.agentSessionId);
-    if (liveClient?.agentSessionId) {
-      this.rememberAgentClient(tab, liveClient);
-      return liveClient.agentSessionId;
-    }
-
-    if (tab.lastKnownAgentKind !== 'codex') {
-      return null;
-    }
-    return normalizeRestoredAgentSessionId(tab.lastKnownAgentSessionId);
+    return tab ? this.codexSessionIdsForTab(tab)[0] ?? null : null;
   }
 
-  private resetCodexActivitySource(sessionId: string | null): void {
-    this.codexActivitySessionId = sessionId;
-    this.codexActivityTranscriptPath = null;
-    this.codexActivityTranscriptOffset = 0;
-    this.codexActivityTranscriptLoaded = false;
-    this.codexActivityNextPathResolveAtMs = 0;
-    this.codexActivityParser.reset();
+  private codexSessionIdsForTab(tab: TerminalTabEntry): string[] {
+    const sessionIds: string[] = [];
+    for (const client of this.matchingAgentClientsForTab(tab, RESTORE_AGENT_MATCH_OPTIONS)) {
+      if (client.kind !== 'codex' || !client.agentSessionId) {
+        continue;
+      }
+      this.rememberAgentClient(tab, client);
+      if (!sessionIds.includes(client.agentSessionId)) {
+        sessionIds.push(client.agentSessionId);
+      }
+    }
+
+    const rememberedSessionId = tab.lastKnownAgentKind === 'codex'
+      ? normalizeRestoredAgentSessionId(tab.lastKnownAgentSessionId)
+      : null;
+    if (sessionIds.length === 0 && rememberedSessionId) {
+      sessionIds.push(rememberedSessionId);
+    }
+    return sessionIds;
+  }
+
+  private syncCodexActivitySelectionToActiveTab(): boolean {
+    if (!this.codexActivityEnabled) {
+      return false;
+    }
+    const tab = this.tabs[this.activeIndex];
+    if (!tab) {
+      return false;
+    }
+    const sessionIds = this.codexSessionIdsForTab(tab);
+    if (sessionIds.length === 0 || (
+      this.codexActivitySelectedSessionId
+      && sessionIds.includes(this.codexActivitySelectedSessionId)
+    )) {
+      return false;
+    }
+    this.codexActivitySelectedSessionId = sessionIds[0];
     this.codexActivityRenderKey = '';
+    return true;
+  }
+
+  private tabIndexForCodexSession(sessionId: string): number {
+    return this.tabs.findIndex((tab) => this.codexSessionIdsForTab(tab).includes(sessionId));
   }
 
   private resolveCodexTranscriptPath(sessionId: string): string | null {
@@ -1680,19 +1761,20 @@ export class TerminalView extends ItemView {
     }
   }
 
-  private renderCodexActivityPanel(
-    sessionId: string | null,
-    activity: CodexSessionActivity | null,
-  ): void {
+  private renderCodexActivityPanel(descriptors: CodexSessionDescriptor[]): void {
     const panel = this.codexActivityEl;
     if (!panel) {
       return;
     }
 
-    panel.toggleClass('is-visible', Boolean(sessionId));
-
-    const renderKey = sessionId
-      ? JSON.stringify([sessionId, activity])
+    panel.toggleClass('is-visible', this.codexActivityEnabled);
+    panel.setAttribute('aria-hidden', String(!this.codexActivityEnabled));
+    const renderKey = this.codexActivityEnabled
+      ? JSON.stringify([
+        this.codexActivitySelectedSessionId,
+        descriptors,
+        descriptors.map((descriptor) => this.codexActivitySources.get(descriptor.sessionId)?.activity ?? null),
+      ])
       : 'hidden';
     if (renderKey === this.codexActivityRenderKey) {
       return;
@@ -1701,13 +1783,77 @@ export class TerminalView extends ItemView {
 
     this.resetCodexActivityMarkdownComponent();
     panel.empty();
-    if (!sessionId) {
+    if (!this.codexActivityEnabled) {
       return;
     }
 
+    const sessionsPane = panel.createDiv('termy-codex-session-pane');
+    const sessionList = sessionsPane.createDiv('termy-codex-session-list');
+    sessionList.setAttribute('role', 'listbox');
+    sessionList.setAttribute('aria-label', t('terminal.sessionActivity.sessions'));
+    if (descriptors.length === 0) {
+      sessionList.createDiv({
+        cls: 'termy-codex-session-empty',
+        text: t('terminal.sessionActivity.noSessions'),
+      });
+    }
+
+    for (const descriptor of descriptors) {
+      const activity = this.codexActivitySources.get(descriptor.sessionId)?.activity ?? null;
+      const state = resolveCodexSessionPanelState(descriptor.clientState, activity?.state ?? null);
+      const selected = descriptor.sessionId === this.codexActivitySelectedSessionId;
+      const row = sessionList.createDiv(`termy-codex-session-item is-${this.codexPanelStateClass(state)}`);
+      row.toggleClass('is-selected', selected);
+      row.setAttribute('role', 'option');
+      row.setAttribute('aria-selected', String(selected));
+      row.setAttribute('data-session-id', descriptor.sessionId);
+      if (selected) {
+        row.ownerDocument.defaultView?.requestAnimationFrame(() => {
+          row.scrollIntoView({ block: 'nearest' });
+        });
+      }
+      row.addEventListener('click', (event) => {
+        event.stopPropagation();
+        this.selectCodexActivitySession(descriptor.sessionId, descriptors);
+      });
+
+      row.createSpan('termy-codex-session-cursor').setText(selected ? '›' : '');
+      row.createSpan('termy-codex-session-state-dot');
+      const text = row.createDiv('termy-codex-session-text');
+      text.createDiv({
+        cls: 'termy-codex-session-title',
+        text: this.codexSessionTitle(descriptor, activity),
+      });
+      const metadata = text.createDiv('termy-codex-session-meta');
+      metadata.createSpan({
+        cls: 'termy-codex-session-state',
+        text: this.codexPanelStateLabel(state),
+      });
+      if (descriptor.cwd) {
+        metadata.createSpan({ cls: 'termy-codex-session-cwd', text: descriptor.cwd });
+      }
+      metadata.createSpan({
+        cls: 'termy-codex-session-id',
+        text: descriptor.sessionId.slice(0, 8),
+      });
+    }
+
+    const detailPane = panel.createDiv('termy-codex-detail-pane');
+    const selectedDescriptor = descriptors.find(
+      (descriptor) => descriptor.sessionId === this.codexActivitySelectedSessionId,
+    ) ?? null;
+    if (!selectedDescriptor) {
+      detailPane.createDiv({
+        cls: 'termy-codex-detail-empty',
+        text: t('terminal.sessionActivity.selectSession'),
+      });
+      return;
+    }
+
+    const activity = this.codexActivitySources.get(selectedDescriptor.sessionId)?.activity ?? null;
     const state = activity?.state ?? 'idle';
     const markdownComponent = this.createCodexActivityMarkdownComponent();
-    const body = panel.createDiv({ cls: ['termy-codex-activity-body', 'markdown-rendered'] });
+    const body = detailPane.createDiv({ cls: ['termy-codex-activity-body', 'markdown-rendered'] });
     const promptRow = body.createDiv('termy-codex-activity-row is-prompt');
     const promptLabel = promptRow.createSpan({ cls: 'termy-codex-activity-label', text: '🎯' });
     promptLabel.title = t('terminal.sessionActivity.task');
@@ -1721,9 +1867,6 @@ export class TerminalView extends ItemView {
     }
 
     const progressRow = body.createDiv('termy-codex-activity-row is-progress');
-    const progressLabel = progressRow.createSpan({ cls: 'termy-codex-activity-label', text: '💬' });
-    progressLabel.title = t('terminal.sessionActivity.progress');
-    progressLabel.setAttribute('aria-label', t('terminal.sessionActivity.progress'));
     const progress = progressRow.createDiv('termy-codex-activity-updates');
     const updates = activity?.updates.slice(-CODEX_ACTIVITY_VISIBLE_UPDATES) ?? [];
     if (updates.length === 0) {
@@ -1738,6 +1881,12 @@ export class TerminalView extends ItemView {
       for (const update of updates) {
         const updateEl = progress.createDiv('termy-codex-activity-update');
         updateEl.toggleClass('is-reasoning-summary', update.kind === 'reasoning-summary');
+        const updateLabel = updateEl.createSpan({
+          cls: 'termy-codex-activity-label',
+          text: update.kind === 'reasoning-summary' ? '🧠' : '💬',
+        });
+        updateLabel.title = t('terminal.sessionActivity.progress');
+        updateLabel.setAttribute('aria-label', t('terminal.sessionActivity.progress'));
         const updateText = updateEl.createDiv({
           cls: ['termy-codex-activity-update-text', 'markdown-rendered'],
         });
@@ -1749,20 +1898,123 @@ export class TerminalView extends ItemView {
       void Promise.all(renderPromises).then(() => this.scrollCodexActivityProgressToBottom(progress));
     }
 
-    if (state === 'complete') {
+    if (state === 'complete' || state === 'aborted') {
       const completionRow = body.createDiv('termy-codex-activity-row is-complete');
       const completionLabel = completionRow.createSpan({
         cls: 'termy-codex-activity-label',
-        text: '✅',
+        text: state === 'complete' ? '✅' : '⏹️',
       });
-      const completedText = t('terminal.sessionActivity.completed');
+      const completedText = state === 'complete'
+        ? t('terminal.sessionActivity.completed')
+        : t('terminal.sessionActivity.aborted');
       completionLabel.title = completedText;
       completionLabel.setAttribute('aria-label', completedText);
-      completionRow.createDiv({
-        cls: 'termy-codex-activity-completion',
-        text: completedText,
+      const completion = completionRow.createDiv({
+        cls: ['termy-codex-activity-completion', 'markdown-rendered'],
       });
+      if (state === 'complete' && activity?.finalAnswer) {
+        void MarkdownRenderer.render(this.app, activity.finalAnswer, completion, '', markdownComponent)
+          .catch((error) => errorLog('[TerminalView] Failed to render Codex final answer Markdown:', error));
+      } else {
+        completion.setText(completedText);
+      }
     }
+  }
+
+  private handleCodexActivityKeydown(event: KeyboardEvent): void {
+    if (!this.codexActivityEnabled) {
+      return;
+    }
+    if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    const descriptors = collectCodexSessionDescriptors(this.latestAgentSnapshot?.clients ?? []);
+    const nextSessionId = moveCodexSessionSelection(
+      descriptors.map((descriptor) => descriptor.sessionId),
+      this.codexActivitySelectedSessionId,
+      event.key === 'ArrowUp' ? -1 : 1,
+    );
+    if (nextSessionId) {
+      this.selectCodexActivitySession(nextSessionId, descriptors);
+    }
+  }
+
+  private selectCodexActivitySession(
+    sessionId: string,
+    descriptors: CodexSessionDescriptor[],
+  ): void {
+    const selectionChanged = sessionId !== this.codexActivitySelectedSessionId;
+    this.codexActivitySelectedSessionId = sessionId;
+    const linkedTabIndex = this.tabIndexForCodexSession(sessionId);
+    if (linkedTabIndex >= 0 && linkedTabIndex !== this.activeIndex) {
+      this.setActiveTab(linkedTabIndex);
+      return;
+    }
+    if (selectionChanged) {
+      this.codexActivityRenderKey = '';
+      this.renderCodexActivityPanel(descriptors);
+    }
+    this.codexActivityEl?.focus({ preventScroll: true });
+  }
+
+  private focusCodexActivityPanelSoon(): void {
+    this.clearPendingFocusTimeouts();
+    for (const delay of TERMINAL_FOCUS_RETRY_DELAYS_MS) {
+      const timeout = window.setTimeout(() => {
+        this.pendingFocusTimeouts = this.pendingFocusTimeouts.filter((item) => item !== timeout);
+        if (this.app.workspace.getActiveViewOfType(TerminalView) === this) {
+          this.focusCodexActivityPanel();
+        }
+      }, delay);
+      this.pendingFocusTimeouts.push(timeout);
+    }
+  }
+
+  private focusCodexActivityPanel(): void {
+    if (this.codexActivityEnabled) {
+      this.codexActivityEl?.focus({ preventScroll: true });
+    }
+  }
+
+  private codexSessionTitle(
+    descriptor: CodexSessionDescriptor,
+    activity: CodexSessionActivity | null,
+  ): string {
+    const promptLine = activity?.prompt?.split('\n').find((line) => line.trim())?.trim();
+    if (promptLine) {
+      return promptLine;
+    }
+    if (descriptor.title) {
+      return descriptor.title;
+    }
+    if (descriptor.cwd) {
+      return this.path.basename(descriptor.cwd) || descriptor.cwd;
+    }
+    return descriptor.sessionId.slice(0, 8);
+  }
+
+  private codexPanelStateLabel(state: CodexSessionPanelState): string {
+    switch (state) {
+      case 'needsInput':
+        return t('terminal.sessionActivity.needsInput');
+      case 'working':
+        return t('terminal.sessionActivity.working');
+      case 'completed':
+        return t('terminal.sessionActivity.completed');
+      case 'aborted':
+        return t('terminal.sessionActivity.aborted');
+      case 'idle':
+        return t('terminal.sessionActivity.idle');
+      case 'unknown':
+        return t('terminal.sessionActivity.unknown');
+    }
+  }
+
+  private codexPanelStateClass(state: CodexSessionPanelState): string {
+    return state.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`);
   }
 
   private scrollCodexActivityProgressToBottom(progress: HTMLElement): void {
@@ -1866,6 +2118,10 @@ export class TerminalView extends ItemView {
   getTabCount(): number { return this.tabs.length; }
 
   focusActiveTerminalSoon(): void {
+    if (this.codexActivityEnabled) {
+      this.focusCodexActivityPanelSoon();
+      return;
+    }
     this.clearPendingFocusTimeouts();
     for (const delay of TERMINAL_FOCUS_RETRY_DELAYS_MS) {
       const timeout = window.setTimeout(() => {
@@ -1896,6 +2152,9 @@ export class TerminalView extends ItemView {
     if (!this.contentEl.contains(activeElement)) {
       return false;
     }
+    if (activeElement === this.codexActivityEl && !this.codexActivityEnabled) {
+      return false;
+    }
     if (activeElement.classList.contains('xterm-helper-textarea')) {
       return false;
     }
@@ -1904,6 +2163,10 @@ export class TerminalView extends ItemView {
 
   /** 聚焦当前 active 终端（供切回 Obsidian 标签时自动 focus，避免焦点卡在标签头按钮上） */
   focusActiveTerminal(): void {
+    if (this.codexActivityEnabled) {
+      this.focusCodexActivityPanel();
+      return;
+    }
     if (this.shouldPreserveCurrentFocus()) {
       return;
     }

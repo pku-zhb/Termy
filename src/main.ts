@@ -275,17 +275,6 @@ export default class TerminalPlugin extends Plugin {
     }
   }
 
-  async setCodexActivityPanelEnabled(enabled: boolean): Promise<void> {
-    this.settings.showCodexActivityPanel = enabled;
-    for (const leaf of this.app.workspace.getLeavesOfType(TERMINAL_VIEW_TYPE)) {
-      const view = leaf.view;
-      if (view instanceof TerminalView) {
-        view.setCodexActivityEnabled(enabled);
-      }
-    }
-    await this.saveSettings();
-  }
-
   private normalizePresetScripts(value: unknown): PresetScript[] {
     // Drop preset scripts from features that are no longer shipped.
     const REMOVED_PRESET_SCRIPT_IDS = new Set(['claude-code', 'codex', 'opencode']);
@@ -451,10 +440,16 @@ export default class TerminalPlugin extends Plugin {
       id: 'toggle-codex-activity-panel',
       name: t('commands.toggleCodexActivityPanel'),
       callback: () => {
-        void this.setCodexActivityPanelEnabled(!this.settings.showCodexActivityPanel)
-          .catch((error) => {
-            errorLog('[TerminalPlugin] Failed to toggle Codex activity panel:', error);
-          });
+        const terminalView = this.getActiveTerminalView();
+        if (!terminalView) {
+          return;
+        }
+        window.setTimeout(() => {
+          if (this.app.workspace.getActiveViewOfType(TerminalView) !== terminalView) {
+            this.app.workspace.setActiveLeaf(terminalView.leaf, { focus: true });
+          }
+          terminalView.toggleCodexActivityPanel();
+        }, 0);
       },
     });
 
@@ -1471,12 +1466,7 @@ class TerminalViewPlaceholder extends TerminalView {
       null,
       null,
       plugin.getTerminalRestoreStore(),
-      plugin.settings.showCodexActivityPanel,
-      (enabled) => {
-        void plugin.setCodexActivityPanelEnabled(enabled).catch((error) => {
-          errorLog('[TerminalPlugin] Failed to save Codex activity panel setting:', error);
-        });
-      },
+      false,
     );
     this.plugin = plugin;
   }

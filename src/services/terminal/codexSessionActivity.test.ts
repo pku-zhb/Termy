@@ -89,6 +89,7 @@ test('ignores final answers before the task-complete event arrives', () => {
   ].join('\n') + '\n');
 
   assert.deepEqual(parser.getActivity().updates, []);
+  assert.equal(parser.getActivity().finalAnswer, null);
 });
 
 test('tracks completion, avoids duplicate final text, and resets for a new turn', () => {
@@ -122,6 +123,7 @@ test('tracks completion, avoids duplicate final text, and resets for a new turn'
   ].join('\n') + '\n');
 
   assert.equal(parser.getActivity().state, 'complete');
+  assert.equal(parser.getActivity().finalAnswer, '已经完成。');
   assert.equal(parser.getActivity().updates.length, 1);
   assert.equal(parser.getActivity().updates[0]?.text, '已经完成检查，正在整理结果。');
 
@@ -137,6 +139,7 @@ test('tracks completion, avoids duplicate final text, and resets for a new turn'
   assert.deepEqual(parser.getActivity(), {
     state: 'running',
     prompt: '第二个任务',
+    finalAnswer: null,
     updates: [],
     updatedAtMs: null,
   });

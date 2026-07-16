@@ -11,6 +11,7 @@ export interface CodexSessionActivityUpdate {
 export interface CodexSessionActivity {
   state: CodexSessionActivityState;
   prompt: string | null;
+  finalAnswer: string | null;
   updates: CodexSessionActivityUpdate[];
   updatedAtMs: number | null;
 }
@@ -22,6 +23,7 @@ const MEMORY_CITATION_PATTERN = /\n*<oai-mem-citation>[\s\S]*?<\/oai-mem-citatio
 const EMPTY_CODEX_SESSION_ACTIVITY: CodexSessionActivity = {
   state: 'idle',
   prompt: null,
+  finalAnswer: null,
   updates: [],
   updatedAtMs: null,
 };
@@ -49,10 +51,12 @@ interface TranscriptPayload {
  */
 export class CodexSessionActivityParser {
   private pendingLine = '';
+  private pendingFinalAnswer: string | null = null;
   private activity: CodexSessionActivity = cloneActivity(EMPTY_CODEX_SESSION_ACTIVITY);
 
   reset(): void {
     this.pendingLine = '';
+    this.pendingFinalAnswer = null;
     this.activity = cloneActivity(EMPTY_CODEX_SESSION_ACTIVITY);
   }
 
@@ -128,9 +132,11 @@ export class CodexSessionActivityParser {
       this.activity = {
         state: 'running',
         prompt: null,
+        finalAnswer: null,
         updates: [],
         updatedAtMs: timestampMs,
       };
+      this.pendingFinalAnswer = null;
       return;
     }
     if (payload.type === 'user_message') {
@@ -147,11 +153,13 @@ export class CodexSessionActivityParser {
         if (progress) {
           this.appendUpdate('progress', progress, timestampMs);
         }
+      } else if (payload.phase === 'final_answer') {
+        this.pendingFinalAnswer = normalizeDisplayText(payload.message);
       }
       return;
     }
     if (payload.type === 'task_complete') {
-      const finalMessage = normalizeDisplayText(payload.last_agent_message);
+      const finalMessage = normalizeDisplayText(payload.last_agent_message) ?? this.pendingFinalAnswer;
       if (finalMessage) {
         const finalUpdateIndex = this.activity.updates.findLastIndex(
           (update) => update.text === finalMessage,
@@ -160,11 +168,14 @@ export class CodexSessionActivityParser {
           this.activity.updates.splice(finalUpdateIndex, 1);
         }
       }
+      this.activity.finalAnswer = finalMessage;
+      this.pendingFinalAnswer = null;
       this.activity.state = 'complete';
       this.activity.updatedAtMs = timestampMs ?? this.activity.updatedAtMs;
       return;
     }
     if (payload.type === 'turn_aborted') {
+      this.pendingFinalAnswer = null;
       this.activity.state = 'aborted';
       this.activity.updatedAtMs = timestampMs ?? this.activity.updatedAtMs;
     }
@@ -182,6 +193,10 @@ export class CodexSessionActivityParser {
     }
     if (payload.role === 'assistant' && payload.phase === 'commentary') {
       this.appendUpdate('progress', text, timestampMs);
+      return;
+    }
+    if (payload.role === 'assistant') {
+      this.pendingFinalAnswer = text;
     }
   }
 

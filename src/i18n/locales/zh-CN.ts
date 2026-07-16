@@ -41,14 +41,22 @@ export const zhCN: TranslationKeys = {
       close: '关闭',
     },
     sessionActivity: {
+      sessions: 'Codex 会话',
+      noSessions: '当前没有可检测的 Codex 会话。',
+      selectSession: '选择一个 Codex 会话查看进展。',
       task: '任务',
       progress: '进度',
       waitingPrompt: '等待当前 prompt...',
       waitingProgress: 'Codex 正在处理...',
       noProgress: '本轮没有公开阶段进度。',
+      needsInput: '需处理',
+      working: '进行中',
+      idle: '空闲',
+      unknown: '未知',
       completed: '已完成',
-      showPanel: '显示 Codex 进度浮窗',
-      hidePanel: '隐藏 Codex 进度浮窗',
+      aborted: '已中止',
+      showPanel: '显示 Codex 会话面板',
+      hidePanel: '隐藏 Codex 会话面板',
     },
     contextMenu: {
       copy: '复制',
@@ -75,7 +83,7 @@ export const zhCN: TranslationKeys = {
 
   commands: {
     openTerminal: '打开Termy终端',
-    toggleCodexActivityPanel: '切换 Codex 进度浮窗',
+    toggleCodexActivityPanel: '切换 Codex 会话面板',
     showChangelog: 'Termy：显示更新日志',
     terminalSearch: '终端：搜索',
     terminalClear: '终端：清屏',

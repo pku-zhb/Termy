@@ -41,14 +41,22 @@ export const ru: TranslationKeys = {
       close: 'Закрыть',
     },
     sessionActivity: {
+      sessions: 'Сессии Codex',
+      noSessions: 'Активные сессии Codex не найдены.',
+      selectSession: 'Выберите сессию Codex для просмотра прогресса.',
       task: 'Задача',
       progress: 'Ход работы',
       waitingPrompt: 'Ожидание текущего запроса...',
       waitingProgress: 'Codex обрабатывает запрос...',
       noProgress: 'В этом ходе нет публичных обновлений прогресса.',
+      needsInput: 'Нужен ввод',
+      working: 'В работе',
+      idle: 'Ожидание',
+      unknown: 'Неизвестно',
       completed: 'Завершено',
-      showPanel: 'Показать панель прогресса Codex',
-      hidePanel: 'Скрыть панель прогресса Codex',
+      aborted: 'Прервано',
+      showPanel: 'Показать панель сессий Codex',
+      hidePanel: 'Скрыть панель сессий Codex',
     },
     contextMenu: {
       copy: 'Копировать',
@@ -75,7 +83,7 @@ export const ru: TranslationKeys = {
 
   commands: {
     openTerminal: 'Открыть терминал Termy',
-    toggleCodexActivityPanel: 'Переключить панель прогресса Codex',
+    toggleCodexActivityPanel: 'Переключить панель сессий Codex',
     showChangelog: 'Termy: показать список изменений',
     terminalSearch: 'Терминал: поиск',
     terminalClear: 'Терминал: очистить экран',

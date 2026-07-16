@@ -52,12 +52,20 @@ export interface TranslationKeys {
       close: string;
     };
     sessionActivity: {
+      sessions: string;
+      noSessions: string;
+      selectSession: string;
       task: string;
       progress: string;
       waitingPrompt: string;
       waitingProgress: string;
       noProgress: string;
+      needsInput: string;
+      working: string;
+      idle: string;
+      unknown: string;
       completed: string;
+      aborted: string;
       showPanel: string;
       hidePanel: string;
     };
