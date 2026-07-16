@@ -440,16 +440,7 @@ export default class TerminalPlugin extends Plugin {
       id: 'toggle-codex-activity-panel',
       name: t('commands.toggleCodexActivityPanel'),
       callback: () => {
-        const terminalView = this.getActiveTerminalView();
-        if (!terminalView) {
-          return;
-        }
-        window.setTimeout(() => {
-          if (this.app.workspace.getActiveViewOfType(TerminalView) !== terminalView) {
-            this.app.workspace.setActiveLeaf(terminalView.leaf, { focus: true });
-          }
-          terminalView.toggleCodexActivityPanel();
-        }, 0);
+        this.app.workspace.getActiveViewOfType(TerminalView)?.toggleCodexActivityPanel();
       },
     });
 

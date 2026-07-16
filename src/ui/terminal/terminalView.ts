@@ -358,6 +358,7 @@ export class TerminalView extends ItemView {
   private codexActivityRenderKey = '';
   private readonly codexTranscriptPathCache = new Map<string, string>();
   private codexActivityMarkdownComponent: Component | null = null;
+  private codexActivityKeydownCleanup: (() => void) | null = null;
   private codexActivityEnabled: boolean;
   private terminalContainer: HTMLElement | null = null;
   private dropHintEl: HTMLElement | null = null;
@@ -488,10 +489,15 @@ export class TerminalView extends ItemView {
 
     // 覆盖终端画布但保留上方的 agent monitor 与内部 tab bar。
     this.codexActivityEl = this.terminalContainer.createDiv('termy-codex-activity');
-    this.codexActivityEl.tabIndex = 0;
     this.codexActivityEl.setAttribute('role', 'dialog');
     this.codexActivityEl.setAttribute('aria-label', t('terminal.sessionActivity.sessions'));
-    this.codexActivityEl.addEventListener('keydown', (event) => this.handleCodexActivityKeydown(event));
+    const codexActivityKeydownHandler = (event: KeyboardEvent): void => {
+      this.handleCodexActivityKeydown(event);
+    };
+    container.addEventListener('keydown', codexActivityKeydownHandler, true);
+    this.codexActivityKeydownCleanup = () => {
+      container.removeEventListener('keydown', codexActivityKeydownHandler, true);
+    };
     if (this.codexActivityEnabled) {
       this.startCodexActivityPolling();
     }
@@ -625,6 +631,8 @@ export class TerminalView extends ItemView {
     this.agentStatusUnsubscribe = null;
     this.latestAgentSnapshot = null;
     this.stopCodexActivityPolling();
+    this.codexActivityKeydownCleanup?.();
+    this.codexActivityKeydownCleanup = null;
     this.codexActivityEl = null;
     this.removeDropHandlers?.();
     this.removeDropHandlers = null;
@@ -671,8 +679,8 @@ export class TerminalView extends ItemView {
 
     if (changed && this.codexActivityEl) {
       if (enabled) {
+        this.clearPendingFocusTimeouts();
         this.startCodexActivityPolling();
-        this.focusCodexActivityPanelSoon();
       } else {
         this.stopCodexActivityPolling();
         this.focusActiveTerminalSoon();
@@ -1353,7 +1361,6 @@ export class TerminalView extends ItemView {
         if (this.syncCodexActivitySelectionToActiveTab()) {
           this.refreshCodexActivity();
         }
-        this.focusCodexActivityPanelSoon();
       } else {
         this.tabs[index].terminal.focus();
       }
@@ -1377,9 +1384,7 @@ export class TerminalView extends ItemView {
     window.setTimeout(() => {
       if (terminal.isAlive()) {
         terminal.fit();
-        if (this.codexActivityEnabled) {
-          this.focusCodexActivityPanelSoon();
-        } else {
+        if (!this.codexActivityEnabled) {
           terminal.focus();
         }
       }
@@ -1819,23 +1824,16 @@ export class TerminalView extends ItemView {
 
       row.createSpan('termy-codex-session-cursor').setText(selected ? '›' : '');
       row.createSpan('termy-codex-session-state-dot');
-      const text = row.createDiv('termy-codex-session-text');
-      text.createDiv({
+      row.createDiv({
         cls: 'termy-codex-session-title',
         text: this.codexSessionTitle(descriptor, activity),
       });
-      const metadata = text.createDiv('termy-codex-session-meta');
-      metadata.createSpan({
-        cls: 'termy-codex-session-state',
-        text: this.codexPanelStateLabel(state),
-      });
       if (descriptor.cwd) {
-        metadata.createSpan({ cls: 'termy-codex-session-cwd', text: descriptor.cwd });
+        row.createSpan({
+          cls: 'termy-codex-session-cwd',
+          text: this.path.basename(descriptor.cwd) || descriptor.cwd,
+        });
       }
-      metadata.createSpan({
-        cls: 'termy-codex-session-id',
-        text: descriptor.sessionId.slice(0, 8),
-      });
     }
 
     const detailPane = panel.createDiv('termy-codex-detail-pane');
@@ -1866,20 +1864,21 @@ export class TerminalView extends ItemView {
       prompt.setText(t('terminal.sessionActivity.waitingPrompt'));
     }
 
-    const progressRow = body.createDiv('termy-codex-activity-row is-progress');
-    const progress = progressRow.createDiv('termy-codex-activity-updates');
+    const conversationRow = body.createDiv('termy-codex-activity-row is-conversation');
+    const conversation = conversationRow.createDiv('termy-codex-activity-conversation');
     const updates = activity?.updates.slice(-CODEX_ACTIVITY_VISIBLE_UPDATES) ?? [];
-    if (updates.length === 0) {
-      progress.createDiv({
+    const hasCompletion = state === 'complete' || state === 'aborted';
+    const renderPromises: Array<Promise<void>> = [];
+    if (updates.length === 0 && !hasCompletion) {
+      conversation.createDiv({
         cls: 'termy-codex-activity-placeholder',
         text: state === 'running' || state === 'idle'
           ? t('terminal.sessionActivity.waitingProgress')
           : t('terminal.sessionActivity.noProgress'),
       });
     } else {
-      const renderPromises: Array<Promise<void>> = [];
       for (const update of updates) {
-        const updateEl = progress.createDiv('termy-codex-activity-update');
+        const updateEl = conversation.createDiv('termy-codex-activity-update');
         updateEl.toggleClass('is-reasoning-summary', update.kind === 'reasoning-summary');
         const updateLabel = updateEl.createSpan({
           cls: 'termy-codex-activity-label',
@@ -1895,11 +1894,10 @@ export class TerminalView extends ItemView {
             .catch((error) => errorLog('[TerminalView] Failed to render Codex activity Markdown:', error)),
         );
       }
-      void Promise.all(renderPromises).then(() => this.scrollCodexActivityProgressToBottom(progress));
     }
 
-    if (state === 'complete' || state === 'aborted') {
-      const completionRow = body.createDiv('termy-codex-activity-row is-complete');
+    if (hasCompletion) {
+      const completionRow = conversation.createDiv('termy-codex-activity-update is-final-reply');
       const completionLabel = completionRow.createSpan({
         cls: 'termy-codex-activity-label',
         text: state === 'complete' ? '✅' : '⏹️',
@@ -1913,12 +1911,16 @@ export class TerminalView extends ItemView {
         cls: ['termy-codex-activity-completion', 'markdown-rendered'],
       });
       if (state === 'complete' && activity?.finalAnswer) {
-        void MarkdownRenderer.render(this.app, activity.finalAnswer, completion, '', markdownComponent)
-          .catch((error) => errorLog('[TerminalView] Failed to render Codex final answer Markdown:', error));
+        renderPromises.push(
+          MarkdownRenderer.render(this.app, activity.finalAnswer, completion, '', markdownComponent)
+            .catch((error) => errorLog('[TerminalView] Failed to render Codex final answer Markdown:', error)),
+        );
       } else {
         completion.setText(completedText);
       }
     }
+
+    void Promise.all(renderPromises).then(() => this.scrollCodexActivityConversationToBottom(conversation));
   }
 
   private handleCodexActivityKeydown(event: KeyboardEvent): void {
@@ -1957,26 +1959,6 @@ export class TerminalView extends ItemView {
       this.codexActivityRenderKey = '';
       this.renderCodexActivityPanel(descriptors);
     }
-    this.codexActivityEl?.focus({ preventScroll: true });
-  }
-
-  private focusCodexActivityPanelSoon(): void {
-    this.clearPendingFocusTimeouts();
-    for (const delay of TERMINAL_FOCUS_RETRY_DELAYS_MS) {
-      const timeout = window.setTimeout(() => {
-        this.pendingFocusTimeouts = this.pendingFocusTimeouts.filter((item) => item !== timeout);
-        if (this.app.workspace.getActiveViewOfType(TerminalView) === this) {
-          this.focusCodexActivityPanel();
-        }
-      }, delay);
-      this.pendingFocusTimeouts.push(timeout);
-    }
-  }
-
-  private focusCodexActivityPanel(): void {
-    if (this.codexActivityEnabled) {
-      this.codexActivityEl?.focus({ preventScroll: true });
-    }
   }
 
   private codexSessionTitle(
@@ -1996,40 +1978,23 @@ export class TerminalView extends ItemView {
     return descriptor.sessionId.slice(0, 8);
   }
 
-  private codexPanelStateLabel(state: CodexSessionPanelState): string {
-    switch (state) {
-      case 'needsInput':
-        return t('terminal.sessionActivity.needsInput');
-      case 'working':
-        return t('terminal.sessionActivity.working');
-      case 'completed':
-        return t('terminal.sessionActivity.completed');
-      case 'aborted':
-        return t('terminal.sessionActivity.aborted');
-      case 'idle':
-        return t('terminal.sessionActivity.idle');
-      case 'unknown':
-        return t('terminal.sessionActivity.unknown');
-    }
-  }
-
   private codexPanelStateClass(state: CodexSessionPanelState): string {
     return state.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`);
   }
 
-  private scrollCodexActivityProgressToBottom(progress: HTMLElement): void {
-    const hostWindow = progress.ownerDocument.defaultView;
+  private scrollCodexActivityConversationToBottom(conversation: HTMLElement): void {
+    const hostWindow = conversation.ownerDocument.defaultView;
     if (!hostWindow) {
-      progress.scrollTop = progress.scrollHeight;
+      conversation.scrollTop = conversation.scrollHeight;
       return;
     }
 
     // Markdown rendering and theme styles can settle across two frames. Pinning
     // on both keeps the newest public progress visible without a smooth-scroll jump.
     hostWindow.requestAnimationFrame(() => {
-      progress.scrollTop = progress.scrollHeight;
+      conversation.scrollTop = conversation.scrollHeight;
       hostWindow.requestAnimationFrame(() => {
-        progress.scrollTop = progress.scrollHeight;
+        conversation.scrollTop = conversation.scrollHeight;
       });
     });
   }
@@ -2119,7 +2084,7 @@ export class TerminalView extends ItemView {
 
   focusActiveTerminalSoon(): void {
     if (this.codexActivityEnabled) {
-      this.focusCodexActivityPanelSoon();
+      this.clearPendingFocusTimeouts();
       return;
     }
     this.clearPendingFocusTimeouts();
@@ -2164,7 +2129,6 @@ export class TerminalView extends ItemView {
   /** 聚焦当前 active 终端（供切回 Obsidian 标签时自动 focus，避免焦点卡在标签头按钮上） */
   focusActiveTerminal(): void {
     if (this.codexActivityEnabled) {
-      this.focusCodexActivityPanel();
       return;
     }
     if (this.shouldPreserveCurrentFocus()) {
