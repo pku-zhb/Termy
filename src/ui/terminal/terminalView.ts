@@ -52,6 +52,7 @@ import {
 } from '../../services/terminal/terminalAgentMatching';
 import {
   TerminalRestoreStore,
+  parseClaude3RuntimeSelection,
   restoredAgentCommand,
   type ClaudeAgentLauncher,
   type RestorableAgentKind,
@@ -144,6 +145,8 @@ interface TerminalTabEntry {
   customName: string | null;
   status: TerminalTabStatus;
   lastKnownAgentLauncher: ClaudeAgentLauncher | null;
+  lastKnownAgentModel: string | null;
+  lastKnownAgentProvider: string | null;
 }
 
 interface AddTerminalTabOptions {
@@ -151,6 +154,8 @@ interface AddTerminalTabOptions {
   customName?: string | null;
   agentKind?: RestorableAgentKind | null;
   agentLauncher?: ClaudeAgentLauncher | null;
+  agentModel?: string | null;
+  agentProvider?: string | null;
   activate?: boolean;
   persist?: boolean;
 }
@@ -158,6 +163,8 @@ interface AddTerminalTabOptions {
 interface RestorableAgentSnapshot {
   kind: RestorableAgentKind | null;
   launcher: ClaudeAgentLauncher | null;
+  model: string | null;
+  provider: string | null;
   cwd: string | null;
 }
 
@@ -602,6 +609,8 @@ export class TerminalView extends ItemView {
           customName: restoredTab.customName,
           agentKind: restoredTab.agentKind,
           agentLauncher: restoredTab.agentLauncher,
+          agentModel: restoredTab.agentModel,
+          agentProvider: restoredTab.agentProvider,
           activate: false,
           persist: false,
         });
@@ -680,6 +689,12 @@ export class TerminalView extends ItemView {
         ? 'codeck'
         : restoredAgentLauncher ?? 'none',
       lastKnownAgentLauncher: restoredAgentLauncher,
+      lastKnownAgentModel: restoredAgentLauncher === 'claude3'
+        ? options.agentModel?.trim() || null
+        : null,
+      lastKnownAgentProvider: restoredAgentLauncher === 'claude3'
+        ? options.agentProvider?.trim() || null
+        : null,
     });
 
     // Track foreground changes so the tab can show tmux/ssh/Claude/Codex status.
@@ -714,6 +729,8 @@ export class TerminalView extends ItemView {
     const command = restoredAgentCommand(
       restoredTab.agentKind,
       restoredTab.agentLauncher,
+      restoredTab.agentModel,
+      restoredTab.agentProvider,
     );
     this.sendRestoredAgentCommandWhenReady(terminal, command, restoredTab, 0);
   }
@@ -827,6 +844,8 @@ export class TerminalView extends ItemView {
       cwd: agent.cwd ?? this.safeTerminalCwd(tab.terminal),
       agentKind: agent.kind,
       agentLauncher: agent.launcher,
+      agentModel: agent.model,
+      agentProvider: agent.provider,
       title: tab.terminal.getTitle(),
       updatedAtMs: Date.now(),
     };
@@ -844,15 +863,28 @@ export class TerminalView extends ItemView {
     const foreground = this.foregroundByTerminal.get(tab.terminal) ?? tab.terminal.getForeground();
     const status = tab.status === 'none' ? classifyForeground(foreground) : tab.status;
     if (status === 'codeck') {
-      return { kind: 'codeck', launcher: null, cwd: null };
+      return { kind: 'codeck', launcher: null, model: null, provider: null, cwd: null };
     }
 
     const launcher = this.restorableClaudeLauncher(status) ?? (
       tab.terminal.isClaudeCodeSession() ? tab.lastKnownAgentLauncher : null
     );
-    return launcher
-      ? { kind: 'claude', launcher, cwd: null }
-      : { kind: null, launcher: null, cwd: null };
+    if (!launcher) {
+      return { kind: null, launcher: null, model: null, provider: null, cwd: null };
+    }
+
+    if (launcher === 'claude3') {
+      this.refreshClaude3RuntimeSelection(tab);
+      return {
+        kind: 'claude',
+        launcher,
+        model: tab.lastKnownAgentModel,
+        provider: tab.lastKnownAgentProvider,
+        cwd: null,
+      };
+    }
+
+    return { kind: 'claude', launcher, model: null, provider: null, cwd: null };
   }
 
   private restorableClaudeLauncher(status: TerminalTabStatus): ClaudeAgentLauncher | null {
@@ -879,8 +911,47 @@ export class TerminalView extends ItemView {
         }
         changed = true;
       }
+      if (this.refreshClaude3RuntimeSelection(tab)) {
+        changed = true;
+      }
     }
     return changed;
+  }
+
+  private refreshClaude3RuntimeSelection(tab: TerminalTabEntry): boolean {
+    if (tab.status !== 'claude3' && tab.lastKnownAgentLauncher !== 'claude3') {
+      return false;
+    }
+
+    for (const client of this.matchingAgentClientsForTab(tab)) {
+      const filePath = this.path.join(
+        this.homeDir,
+        '.claude-3',
+        'runtime-selections',
+        `${client.pid}.json`,
+      );
+      try {
+        const selection = parseClaude3RuntimeSelection(
+          JSON.parse(this.fs.readFileSync(filePath, 'utf8')) as unknown,
+          client.pid,
+        );
+        if (!selection) {
+          continue;
+        }
+        if (
+          tab.lastKnownAgentModel === selection.model
+          && tab.lastKnownAgentProvider === selection.provider
+        ) {
+          return false;
+        }
+        tab.lastKnownAgentModel = selection.model;
+        tab.lastKnownAgentProvider = selection.provider;
+        return true;
+      } catch {
+        // The wrapper may not have written the marker yet, or the child exited.
+      }
+    }
+    return false;
   }
 
   private setTerminalTabStatus(terminal: TerminalInstance, status: TerminalTabStatus): void {
@@ -906,7 +977,12 @@ export class TerminalView extends ItemView {
         terminal.resetClaudeCodeSession();
       }
       if (tab) {
-        tab.lastKnownAgentLauncher = this.restorableClaudeLauncher(foregroundStatus);
+        const launcher = this.restorableClaudeLauncher(foregroundStatus);
+        tab.lastKnownAgentLauncher = launcher;
+        if (launcher !== 'claude3') {
+          tab.lastKnownAgentModel = null;
+          tab.lastKnownAgentProvider = null;
+        }
       }
       this.setTerminalTabStatus(terminal, foregroundStatus);
       return;
@@ -916,6 +992,8 @@ export class TerminalView extends ItemView {
       terminal.resetClaudeCodeSession();
       if (tab) {
         tab.lastKnownAgentLauncher = null;
+        tab.lastKnownAgentModel = null;
+        tab.lastKnownAgentProvider = null;
       }
       this.setTerminalTabStatus(terminal, 'none');
       return;

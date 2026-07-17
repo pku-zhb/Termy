@@ -5,6 +5,12 @@ All notable changes to Termy will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.12] - 2026-07-17
+
+### Fixed
+- Persist each Claude3 agents tab's PID-scoped model and provider independently, then restore it with explicit `--model` and `--provider` arguments instead of relying on the global last selection.
+- Fall back to the model picker when a tab has no trustworthy saved selection rather than guessing from another Claude3 tab.
+
 ## [1.5.11] - 2026-07-17
 
 ### Fixed

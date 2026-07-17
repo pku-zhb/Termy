@@ -7,19 +7,26 @@ import * as path from 'node:path';
 import {
   TerminalRestoreStore,
   hasRestorableAgentTabs,
+  parseClaude3RuntimeSelection,
   restoredAgentCommand,
   type TerminalRestoreSnapshot,
 } from './terminalRestoreState.ts';
 
-test('TerminalRestoreStore saves supported launchers per local vault', async () => {
+test('TerminalRestoreStore saves per-tab Claude3 model selections per local vault', async () => {
   const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'termy-restore-'));
   const primary = store(homeDir, '/vault/one');
   const secondary = store(homeDir, '/vault/two');
 
-  await primary.saveSnapshot(snapshot([tab('claude', 'claude3', '/Users/example/lab/termy')], 0));
+  await primary.saveSnapshot(snapshot([
+    tab('claude', 'claude3', '/Users/example/lab/termy', 'claude-fable-5', 'packy2'),
+    tab('claude', 'claude3', '/Users/example/research', 'moonshotai/kimi-k2', 'kimi-xinyi'),
+  ], 0));
   await secondary.saveSnapshot(snapshot([tab('codeck', null, '/Users/example/lab/codeck')], 0));
 
-  assert.deepEqual((await primary.loadSnapshot()).tabs[0], tab('claude', 'claude3', '/Users/example/lab/termy'));
+  assert.deepEqual((await primary.loadSnapshot()).tabs, [
+    tab('claude', 'claude3', '/Users/example/lab/termy', 'claude-fable-5', 'packy2'),
+    tab('claude', 'claude3', '/Users/example/research', 'moonshotai/kimi-k2', 'kimi-xinyi'),
+  ]);
   assert.deepEqual((await secondary.loadSnapshot()).tabs[0], tab('codeck', null, '/Users/example/lab/codeck'));
 });
 
@@ -66,9 +73,36 @@ test('restored agent helpers only open Claude agents, c3 agents, and Codeck', ()
   assert.equal(hasRestorableAgentTabs(snapshot([tab('claude', 'claude', '/tmp')], 0)), true);
   assert.equal(hasRestorableAgentTabs(snapshot([tab('codeck', null, '/tmp')], 0)), true);
   assert.equal(restoredAgentCommand('claude', 'claude'), 'claude agents');
-  assert.equal(restoredAgentCommand('claude', 'claude3'), 'c3 --last agents');
+  assert.equal(restoredAgentCommand('claude', 'claude3'), 'c3 agents');
+  assert.equal(
+    restoredAgentCommand('claude', 'claude3', 'claude-fable-5', 'packy2'),
+    'c3 --model claude-fable-5 --provider packy2 agents',
+  );
+  assert.equal(
+    restoredAgentCommand('claude', 'claude3', "model's beta", 'provider two'),
+    `c3 --model 'model'"'"'s beta' --provider 'provider two' agents`,
+  );
   assert.equal(restoredAgentCommand('claude', null), 'claude agents');
   assert.equal(restoredAgentCommand('codeck', null), 'codeck');
+});
+
+test('parseClaude3RuntimeSelection accepts only the matching child PID and safe arguments', () => {
+  assert.deepEqual(
+    parseClaude3RuntimeSelection({
+      pid: 123,
+      model: 'claude-fable-5',
+      provider: 'packy2',
+      updatedAtMs: 1_700_000_000_000,
+    }, 123),
+    {
+      pid: 123,
+      model: 'claude-fable-5',
+      provider: 'packy2',
+      updatedAtMs: 1_700_000_000_000,
+    },
+  );
+  assert.equal(parseClaude3RuntimeSelection({ pid: 456, model: 'a', provider: 'b' }, 123), null);
+  assert.equal(parseClaude3RuntimeSelection({ pid: 123, model: 'bad\nmodel', provider: 'b' }, 123), null);
 });
 
 function store(homeDir: string, vaultPath: string): TerminalRestoreStore {
@@ -86,12 +120,16 @@ function tab(
   agentKind: 'claude' | 'codeck' | null,
   agentLauncher: 'claude' | 'claude3' | null,
   cwd: string,
+  agentModel: string | null = null,
+  agentProvider: string | null = null,
 ): TerminalRestoreSnapshot['tabs'][number] {
   return {
     customName: null,
     cwd,
     agentKind,
     agentLauncher,
+    agentModel,
+    agentProvider,
     title: null,
     updatedAtMs: 1_700_000_000_000,
   };
