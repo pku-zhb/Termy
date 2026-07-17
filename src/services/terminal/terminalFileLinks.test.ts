@@ -98,6 +98,25 @@ test('normalizeTerminalFileUriLinkTarget still trims prose after a dotted direct
   );
 });
 
+test('normalizeTerminalFileUriLinkTarget continues past dotted identifiers to a common extension', () => {
+  // 实测回归：股票代码里的 ".HK " 不是链接结尾，真正的文件扩展名在后面的 ".md"。
+  const uri = 'file:///Users/zhuhuibin/Nutstore Files/Nutstore/00Temp/0133.HK 招商局中国基金研究 20260717.md';
+  assert.equal(normalizeTerminalFileUriLinkTarget(uri), uri);
+});
+
+test('normalizeTerminalFileUriLinkTarget uses the common-extension list only at whitespace', () => {
+  // 空格边界：常见扩展名结束链接；因此极少见的连续文件名会停在第一个 draft.md。
+  assert.equal(
+    normalizeTerminalFileUriLinkTarget('file:///Users/x/draft.md revised.pdf'),
+    'file:///Users/x/draft.md',
+  );
+  // 强边界：未知扩展名仍然有效，不受白名单限制。
+  assert.equal(
+    normalizeTerminalFileUriLinkTarget('file:///Users/x/archive.uncommonext'),
+    'file:///Users/x/archive.uncommonext',
+  );
+});
+
 test('parseTerminalFileUriLinks detects raw file URLs with dotted directory segments', () => {
   const uri = 'file:///Users/example/v1.2 data/link-test.md';
   const text = `open ${uri} now`;
@@ -107,6 +126,19 @@ test('parseTerminalFileUriLinks detects raw file URLs with dotted directory segm
       uri,
       startIndex: 5,
       endIndex: 5 + uri.length,
+    },
+  ]);
+});
+
+test('parseTerminalFileUriLinks keeps screenshot file URLs with dotted identifiers intact', () => {
+  const uri = 'file:///Users/zhuhuibin/Nutstore Files/Nutstore/00Temp/0133.HK 招商局中国基金研究 20260717.md';
+  const text = `报告:${uri}`;
+
+  assert.deepEqual(parseTerminalFileUriLinks(text), [
+    {
+      uri,
+      startIndex: 3,
+      endIndex: 3 + uri.length,
     },
   ]);
 });

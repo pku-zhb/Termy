@@ -234,6 +234,30 @@ test('link window records junctions so word-wrap-eaten spaces can be recovered',
   assert.ok(candidates.includes('file:///Users/a/Nutstore Files/Nutstore/00 Temp/AVGO 26Q1 CB.md'));
 });
 
+test('link window preserves a dotted ticker before the actual extension', () => {
+  // 截图回归：硬换行吃掉 "00 Temp" 中的空格，同时文件名里的 ".HK " 不能提前截断。
+  const row0 = '报告:file:///Users/zhuhuibin/Nutstore Files/Nutstore/00';
+  const row1 = 'Temp/0133.HK 招商局中国基金研究 20260717.md';
+  const buffer = bufferFromLines([bufferLineFromText(row0), bufferLineFromText(row1)]);
+
+  const window = buildTerminalLinkWindow(buffer, 0, terminalFileUriLooksOpenAtEnd);
+  assert.ok(window);
+  const link = parseTerminalFileUriLinks(window.text)[0];
+  assert.ok(link);
+  assert.equal(
+    link.uri,
+    'file:///Users/zhuhuibin/Nutstore Files/Nutstore/00Temp/0133.HK 招商局中国基金研究 20260717.md',
+  );
+
+  const junctions = window.hardJunctions
+    .filter((junction) => junction > link.startIndex && junction < link.endIndex)
+    .map((junction) => junction - link.startIndex);
+  const candidates = buildTerminalFileUriJunctionCandidates(link.uri, junctions);
+  assert.ok(candidates.includes(
+    'file:///Users/zhuhuibin/Nutstore Files/Nutstore/00 Temp/0133.HK 招商局中国基金研究 20260717.md',
+  ));
+});
+
 test('link window still joins soft-wrapped rows without stripping indent', () => {
   // 软换行（isWrapped=true）行首空格是内容的一部分，不能剥，也不算硬拼接点。
   const buffer = bufferFromLines([

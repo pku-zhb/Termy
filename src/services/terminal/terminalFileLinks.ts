@@ -9,32 +9,140 @@ export interface TerminalFileUriReference {
   line?: number;
 }
 
-// Match literal file:// URLs shown in terminal output. OSC 8 hyperlinks are
+// Match a broad literal file:// candidate shown in terminal output. The custom
+// normalizer below decides where a raw-space URI ends; OSC 8 hyperlinks are
 // handled by xterm's built-in linkHandler path.
-// 第一分支（带扩展名、允许路径含空格）的结束判定：`.ext` 后跟空格时，仅当该空格后面不再
-// 是「连续非空字符 + 路径分隔符」才算链接结束——否则像 "v1.2 data/note.md" 里的 ".2 " 会被
-// 误判为结尾而截断。`$` 与右括号结尾不受此限制。
-export const TERMINAL_FILE_URI_REGEX = /file:[/]{2}[^\r\n"'!*(){}|\\^<>`]*?\.[A-Za-z0-9]{1,16}(?:[#?][^\s"',.!?;:*(){}|\\^<>`]*)?(?::\d+)?(?=(?:[,.!?;:]?)(?:\s(?![^\s]*[/\\])|$|[)\]}>]))|file:[/]{2}[^\s"'!*(){}|\\^<>`]*[^\s"':,.!?{}|\\^~[\]`()<>]/i;
+export const TERMINAL_FILE_URI_REGEX = /file:[/]{2}[^\r\n"'!*(){}|\\^<>`\]]+/i;
 
 const FILE_URI_PREFIX_REGEX = /file:[/]{2}/i;
-const FILE_EXTENSION_BOUNDARY_REGEX = /\.[A-Za-z0-9]{1,16}(?:[#?][^\s"',.!?;:*(){}|\\^<>`]*)?(?::\d+)?(?=(?:[,.!?;:]?)(?:\s|$))/g;
+const FILE_EXTENSION_CANDIDATE_REGEX = /\.([A-Za-z0-9]{1,16})(?:[#?][^\s"',.!?;:*(){}|\\^<>`]*)?(?::\d+)?/g;
+const FILE_URI_WHITESPACE_BOUNDARY_REGEX = /^[,.!?;:]?\s+/;
+const FILE_URI_STRONG_BOUNDARY_REGEX = /^[,.!?;:]?(?:$|[)\]}>])/;
 const COLON_LINE_SUFFIX_REGEX = /(\.[A-Za-z0-9]{1,16})(?::(\d+))$/;
 const HASH_LINE_REFERENCE_REGEX = /^(?:L|line=)(\d+)$/i;
 const TRAILING_FILE_URI_PUNCTUATION_REGEX = /[\s"',.:;!?)}\]>]+$/;
 const WHITESPACE_REGEX = /\s/;
+
+// An extension in this list may end a literal raw-space URI at whitespace.
+// Unknown extensions remain valid at strong boundaries (end of candidate or a
+// closing delimiter); they simply do not prematurely cut off a longer path.
+const COMMON_TERMINAL_FILE_EXTENSIONS = new Set([
+  '7z',
+  'avi',
+  'bmp',
+  'bz2',
+  'c',
+  'cc',
+  'cpp',
+  'csv',
+  'css',
+  'db',
+  'doc',
+  'docx',
+  'epub',
+  'feather',
+  'fish',
+  'gif',
+  'go',
+  'gz',
+  'h',
+  'heic',
+  'hpp',
+  'htm',
+  'html',
+  'ipynb',
+  'java',
+  'jpeg',
+  'jpg',
+  'js',
+  'json',
+  'jsonl',
+  'jsx',
+  'less',
+  'lock',
+  'log',
+  'm4a',
+  'markdown',
+  'md',
+  'mjs',
+  'mkv',
+  'mov',
+  'mp3',
+  'mp4',
+  'parquet',
+  'pdf',
+  'php',
+  'png',
+  'ppt',
+  'pptx',
+  'py',
+  'rb',
+  'rs',
+  'rtf',
+  'scss',
+  'sh',
+  'sql',
+  'sqlite',
+  'sqlite3',
+  'svg',
+  'swift',
+  'tar',
+  'tgz',
+  'tif',
+  'tiff',
+  'toml',
+  'ts',
+  'tsx',
+  'txt',
+  'wasm',
+  'wav',
+  'webp',
+  'xls',
+  'xlsx',
+  'xml',
+  'xz',
+  'yaml',
+  'yml',
+  'zip',
+  'zsh',
+  'zst',
+]);
 
 function trimTerminalFileUriEnd(uri: string): string {
   return uri.replace(TRAILING_FILE_URI_PUNCTUATION_REGEX, '');
 }
 
 function findFileUriExtensionBoundaryEnd(uri: string): number {
-  // 真正的文件扩展名属于最后一个路径段，所以只认「最后一个路径分隔符之后」的扩展名边界。
-  // 否则中间目录名里的点号 + 空格（如 "v1.2 data/note.md" 里的 ".2 "）会被误当扩展名而截断。
-  const lastSeparatorIndex = Math.max(uri.lastIndexOf('/'), uri.lastIndexOf('\\'));
-  for (const match of uri.matchAll(FILE_EXTENSION_BOUNDARY_REGEX)) {
+  for (const match of uri.matchAll(FILE_EXTENSION_CANDIDATE_REGEX)) {
     const start = match.index ?? 0;
-    if (start > lastSeparatorIndex) {
-      return start + match[0].length;
+    const end = start + match[0].length;
+    const rest = uri.slice(end);
+
+    // End-of-candidate and closing delimiters are unambiguous, so arbitrary
+    // extensions remain supported there.
+    if (FILE_URI_STRONG_BOUNDARY_REGEX.test(rest)) {
+      return end;
+    }
+
+    const whitespaceBoundary = FILE_URI_WHITESPACE_BOUNDARY_REGEX.exec(rest);
+    if (!whitespaceBoundary) {
+      continue;
+    }
+
+    // A dotted directory followed by another path token ("v1.2 data/note.md")
+    // is not a file boundary, even if the dotted suffix happens to be common.
+    const afterWhitespace = rest.slice(whitespaceBoundary[0].length);
+    const nextToken = /^\S*/.exec(afterWhitespace)?.[0] ?? '';
+    if (/[\\/]/.test(nextToken)) {
+      continue;
+    }
+
+    // At an ambiguous whitespace boundary, only common file extensions may
+    // terminate the URI. This keeps scanning past identifiers such as 0133.HK
+    // until the actual basename extension appears later in the same path.
+    const extension = match[1]?.toLowerCase();
+    if (extension && COMMON_TERMINAL_FILE_EXTENSIONS.has(extension)) {
+      return end;
     }
   }
 
@@ -236,4 +344,3 @@ export function parseTerminalFileUriLinks(text: string): TerminalFileUriLink[] {
 
   return links;
 }
-
