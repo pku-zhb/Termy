@@ -145,7 +145,7 @@ export function restoredAgentCommand(
   agentLauncher: ClaudeAgentLauncher | null,
 ): string {
   if (agentKind === 'claude') {
-    return agentLauncher === 'claude3' ? 'c3 agents' : 'claude agents';
+    return agentLauncher === 'claude3' ? 'c3 --last agents' : 'claude agents';
   }
   return 'codeck';
 }

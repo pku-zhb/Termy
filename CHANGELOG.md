@@ -5,6 +5,11 @@ All notable changes to Termy will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.11] - 2026-07-17
+
+### Fixed
+- Restore Claude3's agents view with its remembered model and provider instead of reopening the model picker after a Termy reload.
+
 ## [1.5.10] - 2026-07-17
 
 ### Fixed

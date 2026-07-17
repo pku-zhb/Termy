@@ -66,7 +66,7 @@ test('restored agent helpers only open Claude agents, c3 agents, and Codeck', ()
   assert.equal(hasRestorableAgentTabs(snapshot([tab('claude', 'claude', '/tmp')], 0)), true);
   assert.equal(hasRestorableAgentTabs(snapshot([tab('codeck', null, '/tmp')], 0)), true);
   assert.equal(restoredAgentCommand('claude', 'claude'), 'claude agents');
-  assert.equal(restoredAgentCommand('claude', 'claude3'), 'c3 agents');
+  assert.equal(restoredAgentCommand('claude', 'claude3'), 'c3 --last agents');
   assert.equal(restoredAgentCommand('claude', null), 'claude agents');
   assert.equal(restoredAgentCommand('codeck', null), 'codeck');
 });
