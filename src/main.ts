@@ -436,14 +436,6 @@ export default class TerminalPlugin extends Plugin {
       }
     });
 
-    this.addCommand({
-      id: 'toggle-codex-activity-panel',
-      name: t('commands.toggleCodexActivityPanel'),
-      callback: () => {
-        this.app.workspace.getActiveViewOfType(TerminalView)?.toggleCodexActivityPanel();
-      },
-    });
-
     // Clear screen
     this.addCommand({
       id: 'terminal-clear',
@@ -1457,7 +1449,6 @@ class TerminalViewPlaceholder extends TerminalView {
       null,
       null,
       plugin.getTerminalRestoreStore(),
-      false,
     );
     this.plugin = plugin;
   }

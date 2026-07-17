@@ -2,15 +2,14 @@ type FsModule = typeof import('fs');
 type OsModule = typeof import('os');
 type PathModule = typeof import('path');
 
-export type RestorableAgentKind = 'claude' | 'codex';
-export type ClaudeAgentLauncher = 'claude' | 'claudex' | 'claude3';
+export type RestorableAgentKind = 'claude' | 'codeck';
+export type ClaudeAgentLauncher = 'claude' | 'claude3';
 
 export interface RestoredTerminalTab {
   customName: string | null;
   cwd: string | null;
   agentKind: RestorableAgentKind | null;
   agentLauncher: ClaudeAgentLauncher | null;
-  agentSessionId: string | null;
   title: string | null;
   updatedAtMs: number;
 }
@@ -138,29 +137,17 @@ export class TerminalRestoreStore {
 }
 
 export function hasRestorableAgentTabs(snapshot: TerminalRestoreSnapshot): boolean {
-  return snapshot.tabs.some((tab) =>
-    tab.agentKind === 'claude'
-    || (tab.agentKind === 'codex' && tab.agentSessionId !== null));
+  return snapshot.tabs.some((tab) => tab.agentKind !== null);
 }
 
 export function restoredAgentCommand(
   agentKind: RestorableAgentKind,
   agentLauncher: ClaudeAgentLauncher | null,
-  agentSessionId: string | null,
-  cwd?: string | null,
-): string | null {
+): string {
   if (agentKind === 'claude') {
-    return `${agentLauncher ?? 'claude'} agents`;
+    return agentLauncher === 'claude3' ? 'c3 agents' : 'claude agents';
   }
-
-  const sessionId = normalizeString(agentSessionId);
-  if (!sessionId) {
-    return null;
-  }
-
-  const restoredCwd = normalizeString(cwd);
-  const cwdArgs = restoredCwd ? ` --cd ${shellQuote(restoredCwd)}` : '';
-  return `codex resume${cwdArgs} ${shellQuote(sessionId)}`;
+  return 'codeck';
 }
 
 function emptyRestoreFile(deviceId: string): RestoreFile {
@@ -241,13 +228,14 @@ function normalizeTab(value: unknown): RestoredTerminalTab | null {
 
   const customName = normalizeNullableString(value.customName);
   const cwd = normalizeNullableString(value.cwd);
-  const agentKind = normalizeAgentKind(value.agentKind);
+  const normalizedKind = normalizeAgentKind(value.agentKind);
+  const legacyLauncher = normalizeString(value.agentLauncher);
+  const agentKind = normalizedKind === 'claude' && legacyLauncher === 'claudex'
+    ? null
+    : normalizedKind;
   const agentLauncher = agentKind === 'claude'
     ? normalizeClaudeAgentLauncher(value.agentLauncher) ?? 'claude'
     : null;
-  const agentSessionId = agentKind === 'claude'
-    ? null
-    : normalizeNullableString(value.agentSessionId ?? value.sessionId);
   const title = normalizeNullableString(value.title);
   const updatedAtMs = typeof value.updatedAtMs === 'number' && Number.isFinite(value.updatedAtMs)
     ? value.updatedAtMs
@@ -262,17 +250,9 @@ function normalizeTab(value: unknown): RestoredTerminalTab | null {
     cwd,
     agentKind,
     agentLauncher,
-    agentSessionId,
     title,
     updatedAtMs,
   };
-}
-
-function shellQuote(value: string): string {
-  if (/^[A-Za-z0-9._:/@+-]+$/.test(value)) {
-    return value;
-  }
-  return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
 function normalizeIndex(value: unknown, count: number): number {
@@ -283,11 +263,11 @@ function normalizeIndex(value: unknown, count: number): number {
 }
 
 function normalizeAgentKind(value: unknown): RestorableAgentKind | null {
-  return value === 'claude' || value === 'codex' ? value : null;
+  return value === 'claude' || value === 'codeck' ? value : null;
 }
 
 function normalizeClaudeAgentLauncher(value: unknown): ClaudeAgentLauncher | null {
-  return value === 'claude' || value === 'claudex' || value === 'claude3' ? value : null;
+  return value === 'claude' || value === 'claude3' ? value : null;
 }
 
 function normalizeNullableString(value: unknown): string | null {

@@ -1,4 +1,4 @@
-import type { AgentClient, AgentKind } from '../agentStatus/types.ts';
+import type { AgentClient } from '../agentStatus/types.ts';
 import type { ForegroundInfo } from '../server/types.ts';
 import {
   terminalStatusAgentKind,
@@ -9,36 +9,11 @@ export interface DirectTerminalAgentMatchInput {
   status: TerminalTabStatus;
   foreground: ForegroundInfo | null | undefined;
   clients: AgentClient[];
-  lastKnownAgentKind: AgentKind | null;
-  lastKnownAgentSessionId: string | null;
-}
-
-export interface DirectTerminalAgentMatchOptions {
-  allowRememberedSession?: boolean;
-  allowSingleLocalFallback?: boolean;
 }
 
 export function matchDirectTerminalAgentClients(
   input: DirectTerminalAgentMatchInput,
-  options: DirectTerminalAgentMatchOptions = {},
 ): AgentClient[] {
-  const allowRememberedSession = options.allowRememberedSession ?? true;
-  const allowSingleLocalFallback = options.allowSingleLocalFallback ?? true;
-  const rememberedMatches = (): AgentClient[] => {
-    if (!allowRememberedSession) {
-      return [];
-    }
-
-    const sessionId = normalizeAgentSessionId(input.lastKnownAgentSessionId);
-    if (!sessionId) {
-      return [];
-    }
-
-    return input.clients.filter((client) =>
-      client.agentSessionId === sessionId
-      && (!input.lastKnownAgentKind || client.kind === input.lastKnownAgentKind));
-  };
-
   const pid = input.foreground?.pid ?? null;
   const agentKind = terminalStatusAgentKind(input.status);
   if (!agentKind) {
@@ -48,7 +23,7 @@ export function matchDirectTerminalAgentClients(
         return wrappedMatches;
       }
     }
-    return rememberedMatches();
+    return [];
   }
 
   const kindClients = input.clients.filter((client) => client.kind === agentKind);
@@ -61,16 +36,11 @@ export function matchDirectTerminalAgentClients(
       return pidMatches;
     }
 
-    return rememberedMatches();
-  }
-
-  const sessionMatches = rememberedMatches();
-  if (sessionMatches.length > 0) {
-    return sessionMatches;
+    return [];
   }
 
   const localClients = kindClients.filter((client) => !client.surfaceId);
-  return allowSingleLocalFallback && localClients.length === 1 ? localClients : [];
+  return localClients.length === 1 ? localClients : [];
 }
 
 /**
@@ -93,9 +63,4 @@ export function matchUniqueDirectAgentClientsByForegroundPid(
       || client.processGroupId === foregroundPid));
   const kinds = new Set(matches.map((client) => client.kind));
   return kinds.size === 1 ? matches : [];
-}
-
-function normalizeAgentSessionId(value: string | null | undefined): string | null {
-  const normalized = value?.trim();
-  return normalized ? normalized : null;
 }

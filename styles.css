@@ -2332,120 +2332,43 @@
   margin-left: 8px;
 }
 
-/* ===================== Agent monitor ===================== */
+/* ===================== Codex credit ===================== */
 .termy-agent-monitor {
   display: flex;
   align-items: center;
-  gap: 8px;
+  justify-content: flex-end;
   flex: 0 0 auto;
-  min-height: 40px;
-  padding: 5px 9px;
-  background-color: color-mix(in srgb, var(--background-primary) 86%, var(--background-secondary));
-  border-bottom: 1px solid var(--background-modifier-border);
+  min-height: 0;
+  margin-left: 4px;
+  padding: 0;
+  background: transparent;
+  border: 0;
   color: var(--text-muted);
   user-select: none;
 }
 
-.termy-agent-monitor-activity {
-  flex: 0 0 auto;
-  width: 9px;
-  height: 9px;
-  border-radius: 999px;
-  background-color: var(--text-faint);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--text-faint) 16%, transparent);
-}
-
-.termy-agent-monitor-activity.is-running {
-  background-color: var(--color-green);
-  box-shadow: 0 0 8px color-mix(in srgb, var(--color-green) 64%, transparent);
-}
-
-.termy-agent-monitor-activity.is-waiting-approval {
-  background-color: var(--color-red);
-  box-shadow: 0 0 9px color-mix(in srgb, var(--color-red) 70%, transparent);
-}
-
-.termy-agent-monitor-summary {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  flex: 1 1 auto;
-  min-width: 0;
-  overflow-x: auto;
-}
-
-.termy-agent-monitor-summary::-webkit-scrollbar {
-  height: 0;
-}
-
-.termy-agent-pill {
+.termy-agent-credit {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  flex: 0 0 auto;
+  gap: 7px;
   height: 28px;
   padding: 0 8px;
   border: 1px solid var(--background-modifier-border);
   border-radius: var(--radius-s);
   background-color: var(--background-primary);
-  color: var(--text-muted);
-  font-size: var(--font-ui-smaller);
-  line-height: 1;
 }
 
-.termy-agent-pill-icon {
-  width: 16px;
-  height: 16px;
+.termy-agent-credit-icon {
+  width: 17px;
+  height: 17px;
   border-radius: 4px;
-}
-
-.termy-agent-pill.is-kind {
-  gap: 6px;
-}
-
-.termy-agent-pill-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 999px;
-  background-color: var(--text-faint);
-}
-
-.termy-agent-pill.is-running .termy-agent-pill-dot {
-  background-color: var(--color-green);
-}
-
-.termy-agent-pill.is-waiting-approval .termy-agent-pill-dot {
-  background-color: var(--color-red);
-}
-
-.termy-agent-pill.is-idle .termy-agent-pill-dot,
-.termy-agent-pill.is-stale .termy-agent-pill-dot {
-  background-color: var(--text-muted);
-}
-
-.termy-agent-pill.is-unknown .termy-agent-pill-dot {
-  background-color: var(--text-faint);
-}
-
-.termy-agent-pill-count {
-  color: var(--text-normal);
-  font-size: var(--font-ui-small);
-  font-weight: var(--font-semibold);
-  font-variant-numeric: tabular-nums;
 }
 
 .termy-agent-credit-meters {
   display: inline-flex;
   align-items: flex-end;
   gap: 3px;
-  flex: 0 0 auto;
   height: 19px;
-  margin-left: 2px;
-}
-
-/* Keep Claude credit collection available, but hide the retired subscription meters. */
-.termy-agent-pill.is-claude .termy-agent-credit-meters {
-  display: none;
 }
 
 .termy-agent-credit-meter {
@@ -2461,25 +2384,14 @@
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--interactive-accent) 18%, transparent);
 }
 
-.termy-agent-credit-meter.is-usage {
-  --termy-agent-meter-color: color-mix(in srgb, var(--interactive-accent) 84%, var(--text-normal));
-  --termy-agent-meter-glow: color-mix(in srgb, var(--interactive-accent) 34%, transparent);
-}
-
 .termy-agent-credit-meter.is-reset {
   --termy-agent-meter-color: color-mix(in srgb, var(--text-accent, var(--interactive-accent)) 62%, var(--text-muted));
   --termy-agent-meter-glow: color-mix(in srgb, var(--text-accent, var(--interactive-accent)) 24%, transparent);
 }
 
-.termy-agent-credit-meter.is-weekly-start {
-  margin-left: 7px;
-}
-
 .termy-agent-credit-meter::after {
   position: absolute;
-  right: 0;
-  bottom: 0;
-  left: 0;
+  inset: auto 0 0;
   height: var(--termy-agent-meter-fill, 0%);
   background-color: var(--termy-agent-meter-color);
   box-shadow: 0 0 5px var(--termy-agent-meter-glow);
@@ -2490,287 +2402,29 @@
   display: none;
 }
 
-.termy-agent-monitor-codex-activity-toggle {
-  flex: 0 0 auto;
-  width: 24px;
-  height: 24px;
-}
-
-.termy-agent-monitor-codex-activity-toggle.is-active {
-  color: var(--text-accent);
-  background-color: var(--background-modifier-hover);
-  box-shadow: inset 0 0 0 1px var(--background-modifier-border);
-}
-
 /* ===================== Termy Dev: 单 view 内多终端 tab ===================== */
 .termy-tab-bar {
   display: flex;
   align-items: center;
-  gap: 2px;
   flex: 0 0 auto;
   padding: 4px 6px;
-  overflow-x: auto;
+  overflow: hidden;
   background-color: var(--background-secondary);
   border-bottom: 1px solid var(--background-modifier-border);
 }
-.termy-tab-bar::-webkit-scrollbar {
+
+.termy-tab-list {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.termy-tab-list::-webkit-scrollbar {
   height: 0;
-}
-
-.termy-codex-activity {
-  position: absolute;
-  inset: 0;
-  z-index: 6;
-  display: flex;
-  flex-direction: column;
-  width: 100%;
-  height: 100%;
-  min-height: 0;
-  overflow: hidden;
-  background-color: var(--background-primary);
-  box-shadow: inset 0 0 0 1px var(--background-modifier-border);
-  color: var(--text-normal);
-  outline: none;
-  opacity: 0;
-  pointer-events: none;
-  visibility: hidden;
-  transition: opacity 120ms ease, visibility 120ms ease;
-}
-
-.termy-codex-activity.is-visible {
-  opacity: 1;
-  pointer-events: auto;
-  visibility: visible;
-}
-
-.termy-codex-session-pane,
-.termy-codex-detail-pane {
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  overflow: hidden;
-}
-
-.termy-codex-session-pane {
-  flex: 0 1 auto;
-  max-height: 33.333%;
-  border-bottom: 1px solid var(--background-modifier-border);
-  background-color: color-mix(in srgb, var(--background-secondary) 78%, var(--background-primary));
-}
-
-.termy-codex-session-list {
-  flex: 0 1 auto;
-  min-height: 0;
-  padding: 4px 6px 6px;
-  overflow-x: hidden;
-  overflow-y: auto;
-  scrollbar-width: thin;
-}
-
-.termy-codex-session-empty,
-.termy-codex-detail-empty {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 16px;
-  color: var(--text-muted);
-  font-family: var(--font-interface);
-  font-size: var(--font-ui-small);
-  text-align: center;
-}
-
-.termy-codex-session-empty {
-  min-height: 38px;
-  padding: 8px 12px;
-}
-
-.termy-codex-detail-empty {
-  min-height: 100%;
-}
-
-.termy-codex-session-item {
-  display: grid;
-  grid-template-columns: 12px 8px minmax(0, 1fr) max-content;
-  gap: 8px;
-  align-items: center;
-  min-height: 32px;
-  padding: 4px 8px 4px 4px;
-  border: 1px solid transparent;
-  border-radius: var(--radius-s);
-  cursor: default;
-  user-select: none;
-}
-
-.termy-codex-session-item + .termy-codex-session-item {
-  margin-top: 2px;
-}
-
-.termy-codex-session-item:hover {
-  background-color: var(--background-modifier-hover);
-}
-
-.termy-codex-session-item.is-selected {
-  border-color: color-mix(in srgb, var(--interactive-accent) 42%, transparent);
-  background-color: color-mix(in srgb, var(--interactive-accent) 14%, transparent);
-}
-
-.termy-codex-session-cursor {
-  color: var(--interactive-accent);
-  font-size: 18px;
-  font-weight: 700;
-  line-height: 1;
-  text-align: center;
-}
-
-.termy-codex-session-state-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 999px;
-  background-color: var(--text-faint);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--text-faint) 14%, transparent);
-}
-
-.termy-codex-session-item.is-needs-input .termy-codex-session-state-dot,
-.termy-codex-session-state-dot.is-needs-input {
-  background-color: var(--color-red);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-red) 18%, transparent);
-}
-
-.termy-codex-session-item.is-working .termy-codex-session-state-dot,
-.termy-codex-session-state-dot.is-working {
-  background-color: var(--color-green);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-green) 18%, transparent);
-}
-
-.termy-codex-session-item.is-completed .termy-codex-session-state-dot,
-.termy-codex-session-state-dot.is-completed {
-  background-color: var(--color-blue);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-blue) 18%, transparent);
-}
-
-.termy-codex-session-item.is-aborted .termy-codex-session-state-dot,
-.termy-codex-session-state-dot.is-aborted {
-  background-color: var(--color-orange);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-orange) 18%, transparent);
-}
-
-.termy-codex-session-title {
-  min-width: 0;
-  overflow: hidden;
-  color: var(--text-normal);
-  font-family: var(--font-interface);
-  font-size: var(--font-ui-small);
-  font-weight: 500;
-  line-height: 1.2;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.termy-codex-session-cwd {
-  max-width: 18ch;
-  overflow: hidden;
-  color: var(--text-faint);
-  font-family: var(--font-interface);
-  font-size: var(--font-ui-smaller);
-  text-align: right;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.termy-codex-detail-pane {
-  flex: 1 1 0;
-  background-color: var(--background-primary);
-}
-
-.termy-codex-activity-body {
-  display: flex;
-  flex-direction: column;
-  flex: 1 1 auto;
-  min-height: 0;
-  padding: 12px 16px 14px;
-  overflow: hidden;
-  color: var(--text-normal);
-  font-family: var(--font-text);
-  font-size: var(--font-text-size);
-  line-height: var(--line-height-normal);
-}
-
-.termy-codex-activity-row {
-  display: grid;
-  grid-template-columns: 28px minmax(0, 1fr);
-  gap: 10px;
-  min-height: 0;
-}
-
-.termy-codex-activity-row.is-prompt {
-  flex: 0 0 2lh;
-  height: 2lh;
-}
-
-.termy-codex-activity-row.is-conversation {
-  display: block;
-  flex: 1 1 auto;
-  overflow: hidden;
-}
-
-.termy-codex-activity-row + .termy-codex-activity-row {
-  margin-top: 10px;
-  padding-top: 10px;
-  border-top: 1px solid var(--background-modifier-border);
-}
-
-.termy-codex-activity-label {
-  padding-top: 1px;
-  color: var(--text-muted);
-  font-family: "Apple Color Emoji", "Segoe UI Emoji", sans-serif;
-  font-size: 1.05em;
-  font-weight: normal;
-  line-height: 1.5;
-  text-align: center;
-  user-select: none;
-}
-
-.termy-codex-activity-prompt {
-  height: 2lh;
-  max-height: 2lh;
-  overflow-x: hidden;
-  overflow-y: auto;
-  scrollbar-width: thin;
-}
-
-.termy-codex-activity-conversation {
-  height: 100%;
-  min-height: 0;
-  padding-right: 6px;
-  overflow-y: auto;
-  scrollbar-width: thin;
-}
-
-.termy-codex-activity-placeholder {
-  color: var(--text-muted);
-}
-
-.termy-codex-activity-completion {
-  min-height: 0;
-  color: var(--text-normal);
-}
-
-.termy-codex-activity-update {
-  display: grid;
-  grid-template-columns: 28px minmax(0, 1fr);
-  gap: 10px;
-  min-width: 0;
-}
-
-.termy-codex-activity-update + .termy-codex-activity-update {
-  margin-top: 12px;
-  padding-top: 12px;
-  border-top: 1px solid var(--background-modifier-border);
-}
-
-.termy-codex-activity-update-text {
-  min-width: 0;
-  overflow-wrap: anywhere;
 }
 
 .termy-tab {
@@ -2800,23 +2454,6 @@
   border-color: var(--interactive-accent);
   box-shadow: 0 0 0 1px var(--interactive-accent);
 }
-.termy-tab.has-agent-state {
-  color: var(--text-normal);
-}
-.termy-tab.has-agent-state.is-agent-running {
-  border-color: color-mix(in srgb, var(--color-green) 72%, var(--background-modifier-border));
-  background-color: color-mix(in srgb, var(--color-green) 14%, var(--background-primary));
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-green) 24%, transparent);
-}
-.termy-tab.has-agent-state.is-agent-waiting-approval {
-  border-color: color-mix(in srgb, var(--color-red) 76%, var(--background-modifier-border));
-  background-color: color-mix(in srgb, var(--color-red) 13%, var(--background-primary));
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-red) 26%, transparent);
-}
-.termy-tab.has-agent-state:hover {
-  filter: brightness(1.03);
-}
-
 /* 序号徽标，对应 Opt+数字切换键 */
 .termy-tab-index {
   display: inline-flex;

@@ -1,40 +1,6 @@
-import { requestUrl } from 'obsidian';
 import { classifyCodexRateLimitWindows } from './codexRateLimits.ts';
 import type { AgentStatusRuntime } from './runtime.ts';
 import type { AgentCreditSnapshot, AgentCreditStatus } from './types.ts';
-
-interface ClaudeUsageCache {
-  data?: ClaudeUsageData | null;
-  lastGoodData?: ClaudeUsageData | null;
-}
-
-interface ClaudeUsageData {
-  fiveHour?: unknown;
-  sevenDay?: unknown;
-  fiveHourResetAt?: string | null;
-  sevenDayResetAt?: string | null;
-}
-
-interface ClaudeCredentialsFile {
-  claudeAiOauth?: ClaudeOAuthCredentials | null;
-}
-
-interface ClaudeOAuthCredentials {
-  accessToken?: string | null;
-  subscriptionType?: string | null;
-  expiresAt?: number | null;
-}
-
-interface ClaudeUsageApiResponse {
-  five_hour?: {
-    utilization?: unknown;
-    resets_at?: string | null;
-  } | null;
-  seven_day?: {
-    utilization?: unknown;
-    resets_at?: string | null;
-  } | null;
-}
 
 export class CreditScanner {
   private readonly runtime: AgentStatusRuntime;
@@ -44,169 +10,12 @@ export class CreditScanner {
   }
 
   async scan(): Promise<AgentCreditSnapshot> {
-    const [codex, claude] = await Promise.all([
-      this.codexCreditStatus(),
-      this.claudeCreditStatus(),
-    ]);
+    const codex = await this.codexCreditStatus();
 
     return {
       generatedAtMs: Date.now(),
       codex,
-      claude,
     };
-  }
-
-  private async claudeCreditStatus(): Promise<AgentCreditStatus | null> {
-    const cachedUsage = await this.cachedClaudeUsage();
-    if (cachedUsage && hasUsagePercent(cachedUsage)) {
-      return this.claudeCreditStatusFromUsage(cachedUsage, 'claude-hud-cache');
-    }
-
-    const refreshedUsage = await this.refreshClaudeUsage();
-    if (refreshedUsage && hasUsagePercent(refreshedUsage)) {
-      return this.claudeCreditStatusFromUsage(refreshedUsage, 'claude-hud-api');
-    }
-
-    return null;
-  }
-
-  private claudeCreditStatusFromUsage(usage: ClaudeUsageData, source: string): AgentCreditStatus {
-    return {
-      fiveHourRemainingPercent: remainingPercentFromUsedPercent(usage.fiveHour),
-      weeklyRemainingPercent: remainingPercentFromUsedPercent(usage.sevenDay),
-      fiveHourResetAtMs: parseDateMs(usage.fiveHourResetAt),
-      weeklyResetAtMs: parseDateMs(usage.sevenDayResetAt),
-      unlimited: false,
-      source,
-    };
-  }
-
-  private async cachedClaudeUsage(): Promise<ClaudeUsageData | null> {
-    const text = await this.runtime.readTextFile(`${this.runtime.homeDir}/.claude/plugins/claude-hud/.usage-cache.json`);
-    const cache = parseJson<ClaudeUsageCache>(text);
-    if (!cache) {
-      return null;
-    }
-
-    return [cache.data, cache.lastGoodData]
-      .filter((usage): usage is ClaudeUsageData => Boolean(usage))
-      .find((usage) => hasUsagePercent(usage)) ?? null;
-  }
-
-  private async refreshClaudeUsage(): Promise<ClaudeUsageData | null> {
-    const credentials = await this.claudeCredentials();
-    const accessToken = credentials?.accessToken?.trim();
-    if (!accessToken || !isClaudeSubscription(credentials?.subscriptionType)) {
-      return null;
-    }
-
-    let timeout: number | null = null;
-    try {
-      const response = await Promise.race([
-        requestUrl({
-          url: 'https://api.anthropic.com/api/oauth/usage',
-          method: 'GET',
-          headers: {
-            Authorization: `Bearer ${accessToken}`,
-            'anthropic-beta': 'oauth-2025-04-20',
-            'User-Agent': 'claude-code/2.1',
-          },
-        }),
-        new Promise<null>((resolve) => {
-          timeout = window.setTimeout(() => resolve(null), 8000);
-        }),
-      ]);
-      if (!response || response.status !== 200) {
-        return null;
-      }
-      const decoded = response.json as ClaudeUsageApiResponse;
-      return {
-        fiveHour: decoded.five_hour?.utilization,
-        sevenDay: decoded.seven_day?.utilization,
-        fiveHourResetAt: decoded.five_hour?.resets_at,
-        sevenDayResetAt: decoded.seven_day?.resets_at,
-      };
-    } catch {
-      return null;
-    } finally {
-      if (timeout !== null) {
-        window.clearTimeout(timeout);
-      }
-    }
-  }
-
-  private async claudeCredentials(): Promise<ClaudeOAuthCredentials | null> {
-    const keychainCredentials = await this.readClaudeKeychainCredentials();
-    if (keychainCredentials) {
-      if (isClaudeSubscription(keychainCredentials.subscriptionType)) {
-        return keychainCredentials;
-      }
-
-      const subscriptionType = await this.readClaudeFileSubscriptionType();
-      if (subscriptionType) {
-        return {
-          ...keychainCredentials,
-          subscriptionType,
-        };
-      }
-
-      return keychainCredentials;
-    }
-
-    return this.readClaudeFileCredentials();
-  }
-
-  private async readClaudeKeychainCredentials(): Promise<ClaudeOAuthCredentials | null> {
-    const serviceNames = ['Claude Code-credentials'];
-    const accountName = envString('USER')?.trim() ?? '';
-
-    for (const serviceName of serviceNames) {
-      if (accountName) {
-        const withAccount = await this.loadClaudeKeychainCredentials(serviceName, accountName);
-        if (withAccount) {
-          return withAccount;
-        }
-      }
-
-      const withoutAccount = await this.loadClaudeKeychainCredentials(serviceName, null);
-      if (withoutAccount) {
-        return withoutAccount;
-      }
-    }
-
-    return null;
-  }
-
-  private async loadClaudeKeychainCredentials(
-    serviceName: string,
-    accountName: string | null,
-  ): Promise<ClaudeOAuthCredentials | null> {
-    const args = ['find-generic-password', '-s', serviceName];
-    if (accountName) {
-      args.push('-a', accountName);
-    }
-    args.push('-w');
-
-    const result = await this.runtime.runCommand('/usr/bin/security', args, { timeoutMs: 3000 });
-    if (!result || result.exitCode !== 0) {
-      return null;
-    }
-
-    const file = parseJson<ClaudeCredentialsFile>(result.stdout.trim());
-    return validClaudeCredentials(file?.claudeAiOauth ?? null);
-  }
-
-  private async readClaudeFileCredentials(): Promise<ClaudeOAuthCredentials | null> {
-    const text = await this.runtime.readTextFile(`${this.runtime.homeDir}/.claude/.credentials.json`);
-    const file = parseJson<ClaudeCredentialsFile>(text);
-    return validClaudeCredentials(file?.claudeAiOauth ?? null);
-  }
-
-  private async readClaudeFileSubscriptionType(): Promise<string | null> {
-    const text = await this.runtime.readTextFile(`${this.runtime.homeDir}/.claude/.credentials.json`);
-    const file = parseJson<ClaudeCredentialsFile>(text);
-    const subscriptionType = file?.claudeAiOauth?.subscriptionType?.trim();
-    return subscriptionType || null;
   }
 
   private async codexCreditStatus(): Promise<AgentCreditStatus | null> {
@@ -337,29 +146,6 @@ export class CreditScanner {
   }
 }
 
-function hasUsagePercent(usage: ClaudeUsageData): boolean {
-  return usage.fiveHour !== undefined || usage.sevenDay !== undefined;
-}
-
-function validClaudeCredentials(credentials: ClaudeOAuthCredentials | null): ClaudeOAuthCredentials | null {
-  const accessToken = credentials?.accessToken?.trim();
-  if (!accessToken) {
-    return null;
-  }
-
-  const expiresAt = credentials?.expiresAt;
-  if (typeof expiresAt === 'number' && expiresAt <= Date.now()) {
-    return null;
-  }
-
-  return credentials;
-}
-
-function isClaudeSubscription(subscriptionType: string | null | undefined): boolean {
-  const value = subscriptionType?.trim();
-  return Boolean(value && !value.toLowerCase().includes('api'));
-}
-
 function remainingPercentFromUsedPercent(value: unknown): number | null {
   const used = numberValue(value);
   return used === null ? null : clampPercent(100 - used);
@@ -396,14 +182,6 @@ function boolValue(value: unknown): boolean | null {
 function dateFromUnixSeconds(value: unknown): number | null {
   const seconds = numberValue(value);
   return seconds && seconds > 0 ? seconds * 1000 : null;
-}
-
-function parseDateMs(value: string | null | undefined): number | null {
-  if (!value) {
-    return null;
-  }
-  const parsed = Date.parse(value);
-  return Number.isFinite(parsed) ? parsed : null;
 }
 
 function parseJson<T>(text: string | null | undefined): T | null {

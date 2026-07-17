@@ -1,37 +1,19 @@
-import { setIcon } from 'obsidian';
 import type {
   AgentCreditStatus,
-  AgentKind,
   AgentSnapshot,
-  AgentState,
   AgentStatusService,
 } from '../../services/agentStatus/agentStatusService';
-import { t } from '../../i18n';
-import { CLAUDE_ICON, CODEX_ICON } from '../terminal/statusIcons';
-
-interface AgentMonitorOptions {
-  codexActivityEnabled: boolean;
-  onCodexActivityToggle: (enabled: boolean) => void;
-}
+import { CODEX_ICON } from '../terminal/statusIcons';
 
 export class AgentMonitor {
   private readonly rootEl: HTMLElement;
   private service: AgentStatusService | null;
   private unsubscribe: (() => void) | null = null;
   private latestSnapshot: AgentSnapshot | null = null;
-  private codexActivityEnabled: boolean;
-  private readonly onCodexActivityToggle: (enabled: boolean) => void;
 
-  constructor(
-    container: HTMLElement,
-    service: AgentStatusService | null,
-    options: AgentMonitorOptions,
-  ) {
+  constructor(container: HTMLElement, service: AgentStatusService | null) {
     this.service = service;
-    this.codexActivityEnabled = options.codexActivityEnabled;
-    this.onCodexActivityToggle = options.onCodexActivityToggle;
     this.rootEl = container.createDiv('termy-agent-monitor');
-
     this.render(this.latestSnapshot);
     this.bindService();
   }
@@ -39,14 +21,6 @@ export class AgentMonitor {
   setService(service: AgentStatusService | null): void {
     this.service = service;
     this.bindService();
-  }
-
-  setCodexActivityEnabled(enabled: boolean): void {
-    if (enabled === this.codexActivityEnabled) {
-      return;
-    }
-    this.codexActivityEnabled = enabled;
-    this.render(this.latestSnapshot);
   }
 
   dispose(): void {
@@ -72,95 +46,44 @@ export class AgentMonitor {
 
   private render(snapshot: AgentSnapshot | null): void {
     const root = this.rootEl;
+    const credit = snapshot?.credits.codex ?? null;
     root.empty();
     root.toggleClass('is-loading', snapshot === null || snapshot.generatedAtMs === 0);
 
-    const activityDot = root.createSpan('termy-agent-monitor-activity');
-    activityDot.addClass(snapshot?.summary.waitingApproval ? 'is-waiting-approval' : snapshot?.summary.running ? 'is-running' : 'is-idle');
-    activityDot.title = 'Agent monitor';
-
-    const summaryEl = root.createDiv('termy-agent-monitor-summary');
-    this.appendKindPill(summaryEl, 'claude', snapshot?.summary.claude ?? 0, snapshot?.credits.claude ?? null);
-    this.appendKindPill(summaryEl, 'codex', snapshot?.summary.codex ?? 0, snapshot?.credits.codex ?? null);
-    this.appendStatePill(summaryEl, 'waitingApproval', snapshot?.summary.waitingApproval ?? 0);
-    this.appendStatePill(summaryEl, 'running', snapshot?.summary.running ?? 0);
-    this.appendStatePill(summaryEl, 'idle', (snapshot?.summary.idle ?? 0) + (snapshot?.summary.stale ?? 0));
-    if ((snapshot?.summary.unknown ?? 0) > 0) {
-      this.appendStatePill(summaryEl, 'unknown', snapshot?.summary.unknown ?? 0);
-    }
-
-    const toggleLabel = this.codexActivityEnabled
-      ? t('terminal.sessionActivity.hidePanel')
-      : t('terminal.sessionActivity.showPanel');
-    const activityToggle = root.createEl('button', {
-      cls: 'termy-agent-monitor-codex-activity-toggle clickable-icon',
-    });
-    activityToggle.type = 'button';
-    activityToggle.toggleClass('is-active', this.codexActivityEnabled);
-    activityToggle.setAttr('aria-label', toggleLabel);
-    activityToggle.setAttr('aria-pressed', String(this.codexActivityEnabled));
-    activityToggle.title = toggleLabel;
-    setIcon(activityToggle, 'message-square');
-    activityToggle.addEventListener('click', (event) => {
-      event.stopPropagation();
-      this.onCodexActivityToggle(!this.codexActivityEnabled);
-    });
-  }
-
-  private appendKindPill(parent: HTMLElement, kind: AgentKind, count: number, credit: AgentCreditStatus | null): void {
-    const pill = parent.createDiv(`termy-agent-pill is-kind is-${kind}`);
+    const pill = root.createDiv('termy-agent-credit is-codex');
     pill.toggleClass('is-empty-credit', !credit);
-    pill.title = credit
-      ? `${kind === 'claude' ? 'Claude' : 'Codex'} ${count}\n${creditTooltip(kind, credit)}`
-      : `${kind === 'claude' ? 'Claude' : 'Codex'} ${count}`;
-    const icon = pill.createEl('img', { cls: 'termy-agent-pill-icon' });
-    icon.alt = '';
-    icon.src = kind === 'claude' ? CLAUDE_ICON : CODEX_ICON;
-    pill.createSpan('termy-agent-pill-count').setText(String(count));
+    pill.title = credit ? creditTooltip(credit) : 'Codex usage: n/a';
+
+    const icon = pill.createEl('img', { cls: 'termy-agent-credit-icon' });
+    icon.alt = 'Codex';
+    icon.src = CODEX_ICON;
 
     const meters = pill.createDiv('termy-agent-credit-meters');
-    if (kind === 'claude') {
-      appendMeter(meters, credit ? usedPercent(credit.fiveHourRemainingPercent) : null, '5h usage', ['is-usage']);
-      appendMeter(meters, credit ? resetElapsedPercent(credit.fiveHourResetAtMs, 5 * 60 * 60 * 1000) : null, '5h reset', ['is-reset']);
-    }
-    const weeklyUsageClasses = kind === 'claude' ? ['is-usage', 'is-weekly-start'] : ['is-usage'];
-    appendMeter(meters, credit ? usedPercent(credit.weeklyRemainingPercent) : null, 'weekly usage', weeklyUsageClasses);
-    appendMeter(meters, credit ? resetElapsedPercent(credit.weeklyResetAtMs, 7 * 24 * 60 * 60 * 1000) : null, 'weekly reset', ['is-reset']);
+    appendMeter(meters, credit ? usedPercent(credit.weeklyRemainingPercent) : null, 'weekly usage', 'is-usage');
+    appendMeter(
+      meters,
+      credit ? resetElapsedPercent(credit.weeklyResetAtMs, 7 * 24 * 60 * 60 * 1000) : null,
+      'weekly reset',
+      'is-reset',
+    );
   }
-
-  private appendStatePill(parent: HTMLElement, state: AgentState, count: number): void {
-    const pill = parent.createDiv(`termy-agent-pill is-state is-${agentStateClass(state)}`);
-    pill.title = `${agentStateLabel(state)} ${count}`;
-    pill.createSpan('termy-agent-pill-dot');
-    pill.createSpan('termy-agent-pill-count').setText(String(count));
-  }
-
 }
 
-function appendMeter(parent: HTMLElement, percent: number | null, title: string, extraClasses: string[] = []): void {
-  const meter = parent.createSpan('termy-agent-credit-meter');
-  for (const extraClass of extraClasses) {
-    meter.addClass(extraClass);
-  }
+function appendMeter(parent: HTMLElement, percent: number | null, title: string, className: string): void {
+  const meter = parent.createSpan(`termy-agent-credit-meter ${className}`);
   meter.style.setProperty('--termy-agent-meter-fill', `${percent ?? 0}%`);
   meter.toggleClass('is-empty', percent === null);
   meter.title = percent === null ? `${title}: n/a` : `${title}: ${percent}%`;
 }
 
-function creditTooltip(kind: AgentKind, credit: AgentCreditStatus): string {
-  const name = kind === 'claude' ? 'Claude' : 'Codex';
+function creditTooltip(credit: AgentCreditStatus): string {
   if (credit.unlimited) {
-    return `${name}: unlimited · ${credit.source}`;
+    return `Codex: unlimited · ${credit.source}`;
   }
-
-  const lines = [
-    `${name} · ${credit.source}`,
-  ];
-  if (kind === 'claude') {
-    lines.push(`5h usage ${displayUsedPercent(credit.fiveHourRemainingPercent)}, reset ${displayResetTime(credit.fiveHourResetAtMs)}`);
-  }
-  lines.push(`weekly usage ${displayUsedPercent(credit.weeklyRemainingPercent)}, reset ${displayResetTime(credit.weeklyResetAtMs)}`);
-  return lines.join('\n');
+  return [
+    `Codex · ${credit.source}`,
+    `weekly usage ${displayUsedPercent(credit.weeklyRemainingPercent)}, reset ${displayResetTime(credit.weeklyResetAtMs)}`,
+  ].join('\n');
 }
 
 function displayUsedPercent(remainingPercent: number | null): string {
@@ -203,28 +126,5 @@ function displayResetTime(resetAtMs: number | null): string {
     && date.getDate() === now.getDate();
   const hours = String(date.getHours()).padStart(2, '0');
   const minutes = String(date.getMinutes()).padStart(2, '0');
-  if (sameDay) {
-    return `${hours}:${minutes}`;
-  }
-
-  return `${date.getMonth() + 1}/${date.getDate()} ${hours}:${minutes}`;
-}
-
-function agentStateLabel(state: AgentState): string {
-  switch (state) {
-    case 'waitingApproval':
-      return '需处理';
-    case 'running':
-      return '运行';
-    case 'idle':
-      return '空闲';
-    case 'stale':
-      return '空闲';
-    case 'unknown':
-      return '未知';
-  }
-}
-
-function agentStateClass(state: AgentState): string {
-  return state === 'waitingApproval' ? 'waiting-approval' : state;
+  return sameDay ? `${hours}:${minutes}` : `${date.getMonth() + 1}/${date.getDate()} ${hours}:${minutes}`;
 }

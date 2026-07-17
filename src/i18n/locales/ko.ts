@@ -40,24 +40,6 @@ export const ko: TranslationKeys = {
       next: '다음',
       close: '닫기',
     },
-    sessionActivity: {
-      sessions: 'Codex 세션',
-      noSessions: '활성 Codex 세션이 없습니다.',
-      selectSession: '진행 상황을 볼 Codex 세션을 선택하세요.',
-      task: '작업',
-      progress: '진행 상황',
-      waitingPrompt: '현재 프롬프트 대기 중...',
-      waitingProgress: 'Codex 처리 중...',
-      noProgress: '이 턴에는 공개된 진행 상황이 없습니다.',
-      needsInput: '입력 필요',
-      working: '작업 중',
-      idle: '대기 중',
-      unknown: '알 수 없음',
-      completed: '완료됨',
-      aborted: '중단됨',
-      showPanel: 'Codex 세션 패널 표시',
-      hidePanel: 'Codex 세션 패널 숨기기',
-    },
     contextMenu: {
       copy: '복사',
       copyAsPlainText: '일반 텍스트로 복사',
@@ -83,7 +65,6 @@ export const ko: TranslationKeys = {
 
   commands: {
     openTerminal: 'Termy 터미널 열기',
-    toggleCodexActivityPanel: 'Codex 세션 패널 전환',
     showChangelog: 'Termy: 변경 로그 보기',
     terminalSearch: '터미널: 검색',
     terminalClear: '터미널: 화면 지우기',

@@ -40,24 +40,6 @@ export const en: TranslationKeys = {
       next: 'Next',
       close: 'Close',
     },
-    sessionActivity: {
-      sessions: 'Codex sessions',
-      noSessions: 'No active Codex sessions detected.',
-      selectSession: 'Select a Codex session to inspect its progress.',
-      task: 'Task',
-      progress: 'Progress',
-      waitingPrompt: 'Waiting for the current prompt...',
-      waitingProgress: 'Codex is processing...',
-      noProgress: 'No public progress updates for this turn.',
-      needsInput: 'Needs input',
-      working: 'Working',
-      idle: 'Idle',
-      unknown: 'Unknown',
-      completed: 'Completed',
-      aborted: 'Aborted',
-      showPanel: 'Show Codex session panel',
-      hidePanel: 'Hide Codex session panel',
-    },
     contextMenu: {
       copy: 'Copy',
       copyAsPlainText: 'Copy as plain text',
@@ -83,7 +65,6 @@ export const en: TranslationKeys = {
 
   commands: {
     openTerminal: 'Open terminal',
-    toggleCodexActivityPanel: 'Toggle Codex session panel',
     showChangelog: 'Termy: show changelog',
     terminalSearch: 'Terminal: search',
     terminalClear: 'Terminal: clear screen',

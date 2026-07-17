@@ -1,14 +1,16 @@
 import type { ForegroundInfo } from '../server/types';
 
-export type AgentTerminalTabStatus = 'claude' | 'claudex' | 'claude3' | 'codex';
+export type AgentTerminalTabStatus = 'claude' | 'claudex' | 'claude3' | 'codex' | 'codeck';
 export type TerminalTabStatus = 'none' | 'tmux' | 'ssh' | AgentTerminalTabStatus;
 
 const AGENT_STATUS_BY_COMMAND: Readonly<Record<string, AgentTerminalTabStatus>> = {
   claude: 'claude',
   'claude-code': 'claude',
   claudex: 'claudex',
+  c3: 'claude3',
   claude3: 'claude3',
   codex: 'codex',
+  codeck: 'codeck',
 };
 
 export function classifyForeground(info: ForegroundInfo | null): TerminalTabStatus {
@@ -28,7 +30,7 @@ export function terminalStatusAgentKind(status: TerminalTabStatus): 'claude' | '
 
 // name = 前台进程 argv[0] 的 basename；context = 完整命令行（后端 KERN_PROCARGS2 读到的 argv）。
 // Node CLI 与 Python wrapper 的 argv[0] 是 runtime，因此只检查紧随 runtime 的脚本 token，
-// 避免普通参数或文件名中的 claude/claudex/claude3/codex 导致误判。
+// 避免普通参数或文件名中的 agent 名称导致误判。
 export function classifyCommandText(name: string, context = ''): TerminalTabStatus {
   const normalizedName = normalizeCommandName(name);
   const directStatus = agentStatusForCommand(normalizedName);

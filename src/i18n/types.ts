@@ -51,24 +51,6 @@ export interface TranslationKeys {
       next: string;
       close: string;
     };
-    sessionActivity: {
-      sessions: string;
-      noSessions: string;
-      selectSession: string;
-      task: string;
-      progress: string;
-      waitingPrompt: string;
-      waitingProgress: string;
-      noProgress: string;
-      needsInput: string;
-      working: string;
-      idle: string;
-      unknown: string;
-      completed: string;
-      aborted: string;
-      showPanel: string;
-      hidePanel: string;
-    };
     contextMenu: {
       copy: string;
       copyAsPlainText: string;
@@ -95,7 +77,6 @@ export interface TranslationKeys {
   // Commands
   commands: {
     openTerminal: string;
-    toggleCodexActivityPanel: string;
     showChangelog: string;
     terminalSearch: string;
     terminalClear: string;

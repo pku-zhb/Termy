@@ -1,9 +1,7 @@
 import type { WorkspaceLeaf, Menu } from 'obsidian';
 import {
-  Component,
   FileSystemAdapter,
   ItemView,
-  MarkdownRenderer,
   MarkdownView,
   Notice,
   Scope,
@@ -32,7 +30,6 @@ import type {
   AgentClient,
   AgentKind,
   AgentSnapshot,
-  AgentState,
   AgentStatusService,
 } from '../../services/agentStatus/agentStatusService';
 import { AgentMonitor } from '../agentStatus/agentMonitor';
@@ -52,7 +49,6 @@ import {
 import {
   matchDirectTerminalAgentClients,
   matchUniqueDirectAgentClientsByForegroundPid,
-  type DirectTerminalAgentMatchOptions,
 } from '../../services/terminal/terminalAgentMatching';
 import {
   TerminalRestoreStore,
@@ -62,18 +58,6 @@ import {
   type RestoredTerminalTab,
   type TerminalRestoreSnapshot,
 } from '../../services/terminal/terminalRestoreState';
-import {
-  CodexSessionActivityParser,
-  type CodexSessionActivity,
-} from '../../services/terminal/codexSessionActivity';
-import {
-  collectCodexSessionDescriptors,
-  moveCodexSessionSelection,
-  reconcileCodexSessionSelection,
-  resolveCodexSessionPanelState,
-  type CodexSessionDescriptor,
-  type CodexSessionPanelState,
-} from '../../services/terminal/codexSessionPanel';
 import {
   collectTerminalReferenceCandidatePaths,
   fileUriToPlatformPath,
@@ -121,12 +105,6 @@ type XtermBufferRange = import('@xterm/xterm').IBufferRange;
 
 export const TERMINAL_VIEW_TYPE = 'terminal-view';
 const TERMINAL_FOCUS_RETRY_DELAYS_MS = [0, 50, 150] as const;
-const RESTORED_AGENT_METADATA_GRACE_MS = 2 * 60 * 1000;
-const CLAUDE_HOOK_SESSION_LOOKBACK_MS = 10 * 60 * 1000;
-const CODEX_ACTIVITY_POLL_MS = 750;
-const CODEX_ACTIVITY_PATH_RETRY_MS = 2_000;
-const CODEX_ACTIVITY_MAX_READ_BYTES = 8 * 1024 * 1024;
-const CODEX_ACTIVITY_VISIBLE_UPDATES = 8;
 const IDLE_SHELL_PROCESS_NAMES = new Set([
   'bash',
   'cmd',
@@ -165,10 +143,7 @@ interface TerminalTabEntry {
   paneEl: HTMLElement;
   customName: string | null;
   status: TerminalTabStatus;
-  lastKnownAgentKind: RestorableAgentKind | null;
   lastKnownAgentLauncher: ClaudeAgentLauncher | null;
-  lastKnownAgentSessionId: string | null;
-  lastKnownAgentProtectedUntilMs: number;
 }
 
 interface AddTerminalTabOptions {
@@ -176,37 +151,15 @@ interface AddTerminalTabOptions {
   customName?: string | null;
   agentKind?: RestorableAgentKind | null;
   agentLauncher?: ClaudeAgentLauncher | null;
-  agentSessionId?: string | null;
   activate?: boolean;
   persist?: boolean;
-}
-
-interface TerminalTabAgentStatus {
-  state: AgentState;
-  clients: AgentClient[];
 }
 
 interface RestorableAgentSnapshot {
   kind: RestorableAgentKind | null;
   launcher: ClaudeAgentLauncher | null;
-  sessionId: string | null;
   cwd: string | null;
 }
-
-interface CodexActivitySource {
-  readonly sessionId: string;
-  readonly parser: CodexSessionActivityParser;
-  transcriptPath: string | null;
-  transcriptOffset: number;
-  transcriptLoaded: boolean;
-  nextPathResolveAtMs: number;
-  activity: CodexSessionActivity | null;
-}
-
-const RESTORE_AGENT_MATCH_OPTIONS: DirectTerminalAgentMatchOptions = {
-  allowRememberedSession: false,
-  allowSingleLocalFallback: false,
-};
 
 function isIdleShellForeground(info: ForegroundInfo): boolean {
   if (classifyForeground(info) !== 'none') {
@@ -230,27 +183,6 @@ function basenameCommand(command: string): string {
   const trimmed = command.trim();
   const basename = trimmed.split(/[\\/]/).pop() ?? trimmed;
   return basename.replace(/^-+/, '');
-}
-
-function aggregateTabAgentStatus(clients: AgentClient[]): TerminalTabAgentStatus | null {
-  if (clients.length === 0) {
-    return null;
-  }
-
-  if (clients.some((client) => client.state === 'waitingApproval')) {
-    return { state: 'waitingApproval', clients };
-  }
-  if (clients.some((client) => client.state === 'running')) {
-    return { state: 'running', clients };
-  }
-  if (clients.some((client) => client.state === 'unknown')) {
-    return { state: 'unknown', clients };
-  }
-  return { state: 'idle', clients };
-}
-
-function shouldPaintTabAgentState(state: AgentState): boolean {
-  return state === 'running' || state === 'waitingApproval';
 }
 
 function uniqueAgentKinds(clients: AgentClient[]): AgentKind[] {
@@ -310,30 +242,7 @@ function shellTokens(commandLine: string): string[] {
   return matches?.map((token) => token.replace(/^['"]|['"]$/g, '')) ?? [];
 }
 
-function agentStateClass(state: AgentState): string {
-  return state === 'waitingApproval' ? 'waiting-approval' : state;
-}
-
-function agentStateLabel(state: AgentState): string {
-  switch (state) {
-    case 'waitingApproval':
-      return '需处理';
-    case 'running':
-      return '运行';
-    case 'idle':
-    case 'stale':
-      return '空闲';
-    case 'unknown':
-      return '未知';
-  }
-}
-
 function normalizeRestoredCustomName(value: string | null | undefined): string | null {
-  const trimmed = value?.trim();
-  return trimmed ? trimmed : null;
-}
-
-function normalizeRestoredAgentSessionId(value: string | null | undefined): string | null {
   const trimmed = value?.trim();
   return trimmed ? trimmed : null;
 }
@@ -351,15 +260,7 @@ export class TerminalView extends ItemView {
   private agentStatusUnsubscribe: (() => void) | null = null;
   private latestAgentSnapshot: AgentSnapshot | null = null;
   private tabBarEl: HTMLElement | null = null;
-  private codexActivityEl: HTMLElement | null = null;
-  private codexActivityTimer: number | null = null;
-  private codexActivitySelectedSessionId: string | null = null;
-  private readonly codexActivitySources = new Map<string, CodexActivitySource>();
-  private codexActivityRenderKey = '';
-  private readonly codexTranscriptPathCache = new Map<string, string>();
-  private codexActivityMarkdownComponent: Component | null = null;
-  private codexActivityKeydownCleanup: (() => void) | null = null;
-  private codexActivityEnabled: boolean;
+  private tabListEl: HTMLElement | null = null;
   private terminalContainer: HTMLElement | null = null;
   private dropHintEl: HTMLElement | null = null;
   private dragEnterDepth = 0;
@@ -394,13 +295,11 @@ export class TerminalView extends ItemView {
     terminalService: TerminalService | null,
     agentStatusService: AgentStatusService | null = null,
     restoreStore: TerminalRestoreStore | null = null,
-    codexActivityEnabled = false,
   ) {
     super(leaf);
     this.terminalService = terminalService;
     this.agentStatusService = agentStatusService;
     this.restoreStore = restoreStore;
-    this.codexActivityEnabled = codexActivityEnabled;
     this.fs = window.require('fs') as FsModule;
     const os = window.require('os') as OsModule;
     this.homeDir = os.homedir();
@@ -471,14 +370,11 @@ export class TerminalView extends ItemView {
     container.empty();
     container.addClass('terminal-view-container');
 
-    this.agentMonitor = new AgentMonitor(container, this.agentStatusService, {
-      codexActivityEnabled: this.codexActivityEnabled,
-      onCodexActivityToggle: (enabled) => this.setCodexActivityEnabled(enabled),
-    });
-    this.bindAgentStatusSnapshot();
-
-    // 内部 tab 栏（顶部），管理本 view 内的多个终端
+    // Tabs and Codex usage share one row. Tabs scroll while usage stays pinned.
     this.tabBarEl = container.createDiv('termy-tab-bar');
+    this.tabListEl = this.tabBarEl.createDiv('termy-tab-list');
+    this.agentMonitor = new AgentMonitor(this.tabBarEl, this.agentStatusService);
+    this.bindAgentStatusSnapshot();
 
     // Create the search bar container
     this.searchContainer = container.createDiv('terminal-search-container');
@@ -486,21 +382,6 @@ export class TerminalView extends ItemView {
 
     // terminalContainer 作为多个终端 pane 的父容器
     this.terminalContainer = container.createDiv('terminal-container');
-
-    // 覆盖终端画布但保留上方的 agent monitor 与内部 tab bar。
-    this.codexActivityEl = this.terminalContainer.createDiv('termy-codex-activity');
-    this.codexActivityEl.setAttribute('role', 'dialog');
-    this.codexActivityEl.setAttribute('aria-label', t('terminal.sessionActivity.sessions'));
-    const codexActivityKeydownHandler = (event: KeyboardEvent): void => {
-      this.handleCodexActivityKeydown(event);
-    };
-    container.addEventListener('keydown', codexActivityKeydownHandler, true);
-    this.codexActivityKeydownCleanup = () => {
-      container.removeEventListener('keydown', codexActivityKeydownHandler, true);
-    };
-    if (this.codexActivityEnabled) {
-      this.startCodexActivityPolling();
-    }
 
     this.ensureDropHint();
     this.hideDropHint();
@@ -627,13 +508,11 @@ export class TerminalView extends ItemView {
     this.searchStateCleanup = null;
     this.agentMonitor?.dispose();
     this.agentMonitor = null;
+    this.tabListEl = null;
+    this.tabBarEl = null;
     this.agentStatusUnsubscribe?.();
     this.agentStatusUnsubscribe = null;
     this.latestAgentSnapshot = null;
-    this.stopCodexActivityPolling();
-    this.codexActivityKeydownCleanup?.();
-    this.codexActivityKeydownCleanup = null;
-    this.codexActivityEl = null;
     this.removeDropHandlers?.();
     this.removeDropHandlers = null;
     this.dragEnterDepth = 0;
@@ -672,27 +551,6 @@ export class TerminalView extends ItemView {
     this.bindAgentStatusSnapshot();
   }
 
-  setCodexActivityEnabled(enabled: boolean): void {
-    const changed = enabled !== this.codexActivityEnabled;
-    this.codexActivityEnabled = enabled;
-    this.agentMonitor?.setCodexActivityEnabled(enabled);
-
-    if (changed && this.codexActivityEl) {
-      if (enabled) {
-        this.clearPendingFocusTimeouts();
-        this.startCodexActivityPolling();
-      } else {
-        this.stopCodexActivityPolling();
-        this.focusActiveTerminalSoon();
-      }
-    }
-
-  }
-
-  toggleCodexActivityPanel(): void {
-    this.setCodexActivityEnabled(!this.codexActivityEnabled);
-  }
-
   private bindAgentStatusSnapshot(): void {
     this.agentStatusUnsubscribe?.();
     this.agentStatusUnsubscribe = null;
@@ -700,16 +558,14 @@ export class TerminalView extends ItemView {
     if (!this.agentStatusService) {
       this.latestAgentSnapshot = null;
       this.renderTabBar();
-      this.refreshCodexActivity();
       return;
     }
 
     this.agentStatusUnsubscribe = this.agentStatusService.subscribe((snapshot) => {
       this.latestAgentSnapshot = snapshot;
-      const rememberedAgentChanged = this.refreshRememberedAgentsFromSnapshot();
+      const discoveredWrappedProcess = this.refreshWrappedAgentTabsFromSnapshot();
       this.renderTabBar();
-      this.refreshCodexActivity();
-      if (rememberedAgentChanged) {
+      if (discoveredWrappedProcess) {
         this.scheduleRestoreStatePersist();
       }
     });
@@ -746,7 +602,6 @@ export class TerminalView extends ItemView {
           customName: restoredTab.customName,
           agentKind: restoredTab.agentKind,
           agentLauncher: restoredTab.agentLauncher,
-          agentSessionId: restoredTab.agentSessionId,
           activate: false,
           persist: false,
         });
@@ -816,22 +671,15 @@ export class TerminalView extends ItemView {
     const restoredAgentLauncher = restoredAgentKind === 'claude'
       ? options.agentLauncher ?? 'claude'
       : null;
-    const restoredAgentSessionId = restoredAgentKind === 'codex'
-      ? normalizeRestoredAgentSessionId(options.agentSessionId)
-      : null;
-    const hasRestoredAgentMetadata = restoredAgentKind === 'claude' || restoredAgentSessionId !== null;
 
     this.tabs.push({
       terminal,
       paneEl,
       customName: normalizeRestoredCustomName(options.customName),
-      status: restoredAgentLauncher ?? restoredAgentKind ?? 'none',
-      lastKnownAgentKind: hasRestoredAgentMetadata ? restoredAgentKind : null,
+      status: restoredAgentKind === 'codeck'
+        ? 'codeck'
+        : restoredAgentLauncher ?? 'none',
       lastKnownAgentLauncher: restoredAgentLauncher,
-      lastKnownAgentSessionId: restoredAgentSessionId,
-      lastKnownAgentProtectedUntilMs: hasRestoredAgentMetadata
-        ? Date.now() + RESTORED_AGENT_METADATA_GRACE_MS
-        : 0,
     });
 
     // Track foreground changes so the tab can show tmux/ssh/Claude/Codex status.
@@ -866,13 +714,7 @@ export class TerminalView extends ItemView {
     const command = restoredAgentCommand(
       restoredTab.agentKind,
       restoredTab.agentLauncher,
-      restoredTab.agentSessionId,
-      this.resolveRestoredCwd(restoredTab.cwd),
     );
-    if (!command) {
-      return;
-    }
-
     this.sendRestoredAgentCommandWhenReady(terminal, command, restoredTab, 0);
   }
 
@@ -897,7 +739,6 @@ export class TerminalView extends ItemView {
           errorLog('[TerminalView] Restored agent command skipped because terminal never became ready:', {
             agentKind: restoredTab.agentKind,
             agentLauncher: restoredTab.agentLauncher,
-            agentSessionId: restoredTab.agentSessionId,
           });
         }
         return;
@@ -906,7 +747,6 @@ export class TerminalView extends ItemView {
       terminal.sendText(`${command}\r`);
       debugLog('[TerminalView] Sent restored agent command:', {
         agentKind: restoredTab.agentKind,
-        agentSessionId: restoredTab.agentSessionId,
         attempt,
       });
       this.scheduleRestoreStatePersist();
@@ -987,7 +827,6 @@ export class TerminalView extends ItemView {
       cwd: agent.cwd ?? this.safeTerminalCwd(tab.terminal),
       agentKind: agent.kind,
       agentLauncher: agent.launcher,
-      agentSessionId: agent.kind === 'claude' ? null : agent.sessionId,
       title: tab.terminal.getTitle(),
       updatedAtMs: Date.now(),
     };
@@ -1002,87 +841,28 @@ export class TerminalView extends ItemView {
   }
 
   private resolveRestorableAgentSnapshot(tab: TerminalTabEntry): RestorableAgentSnapshot {
-    const claudeLauncher = this.resolveClaudeAgentLauncher(tab);
-    const matchedClient = this.matchingAgentClientsForTab(tab, RESTORE_AGENT_MATCH_OPTIONS).find((client) =>
-      client.kind === 'claude' || client.kind === 'codex');
-    if (matchedClient) {
-      this.rememberAgentClient(tab, matchedClient);
-      return {
-        kind: matchedClient.kind,
-        launcher: matchedClient.kind === 'claude' ? claudeLauncher : null,
-        sessionId: matchedClient.agentSessionId,
-        cwd: matchedClient.cwd,
-      };
-    }
-    const hookAgent = this.claudeHookAgentForTab(tab);
-    if (hookAgent) {
-      this.rememberAgent(tab, hookAgent.kind, hookAgent.sessionId);
-      return {
-        ...hookAgent,
-        launcher: hookAgent.kind === 'claude' ? claudeLauncher : null,
-      };
-    }
-    const lastKnownAgent = this.preservedLastKnownAgent(tab);
-    if (lastKnownAgent) {
-      return {
-        kind: lastKnownAgent.kind,
-        launcher: lastKnownAgent.kind === 'claude' ? claudeLauncher : null,
-        sessionId: null,
-        cwd: null,
-      };
-    }
-    const statusAgentKind = terminalStatusAgentKind(tab.status);
-    if (statusAgentKind) {
-      return {
-        kind: statusAgentKind,
-        launcher: statusAgentKind === 'claude' ? claudeLauncher : null,
-        sessionId: null,
-        cwd: null,
-      };
-    }
-    if (tab.terminal.isClaudeCodeSession()) {
-      return { kind: 'claude', launcher: claudeLauncher, sessionId: null, cwd: null };
-    }
     const foreground = this.foregroundByTerminal.get(tab.terminal) ?? tab.terminal.getForeground();
-    const foregroundAgentKind = terminalStatusAgentKind(classifyForeground(foreground));
-    return foregroundAgentKind
-      ? {
-        kind: foregroundAgentKind,
-        launcher: foregroundAgentKind === 'claude' ? claudeLauncher : null,
-        sessionId: null,
-        cwd: null,
-      }
-      : { kind: null, launcher: null, sessionId: null, cwd: null };
-  }
-
-  private resolveClaudeAgentLauncher(tab: TerminalTabEntry): ClaudeAgentLauncher {
-    if (tab.lastKnownAgentLauncher) {
-      return tab.lastKnownAgentLauncher;
-    }
-    if (tab.status === 'claude' || tab.status === 'claudex' || tab.status === 'claude3') {
-      return tab.status;
+    const status = tab.status === 'none' ? classifyForeground(foreground) : tab.status;
+    if (status === 'codeck') {
+      return { kind: 'codeck', launcher: null, cwd: null };
     }
 
-    const foreground = this.foregroundByTerminal.get(tab.terminal) ?? tab.terminal.getForeground();
-    const status = classifyForeground(foreground);
-    return status === 'claudex' || status === 'claude3' ? status : 'claude';
+    const launcher = this.restorableClaudeLauncher(status) ?? (
+      tab.terminal.isClaudeCodeSession() ? tab.lastKnownAgentLauncher : null
+    );
+    return launcher
+      ? { kind: 'claude', launcher, cwd: null }
+      : { kind: null, launcher: null, cwd: null };
   }
 
-  private rememberAgentClient(tab: TerminalTabEntry, client: AgentClient): void {
-    if ((client.kind !== 'claude' && client.kind !== 'codex') || !client.agentSessionId) {
-      return;
+  private restorableClaudeLauncher(status: TerminalTabStatus): ClaudeAgentLauncher | null {
+    if (status === 'claude') {
+      return 'claude';
     }
-
-    this.rememberAgent(tab, client.kind, client.agentSessionId);
+    return status === 'claude3' ? 'claude3' : null;
   }
 
-  private rememberAgent(tab: TerminalTabEntry, kind: RestorableAgentKind, sessionId: string): void {
-    tab.lastKnownAgentKind = kind;
-    tab.lastKnownAgentSessionId = sessionId;
-    tab.lastKnownAgentProtectedUntilMs = 0;
-  }
-
-  private refreshRememberedAgentsFromSnapshot(): boolean {
+  private refreshWrappedAgentTabsFromSnapshot(): boolean {
     let changed = false;
     for (const tab of this.tabs) {
       const foreground = this.foregroundByTerminal.get(tab.terminal) ?? tab.terminal.getForeground();
@@ -1094,163 +874,13 @@ export class TerminalView extends ItemView {
         : null;
       if (wrappedAgentKind && tab.status === 'none') {
         tab.status = wrappedAgentKind;
-        changed = true;
-      }
-
-      const client = this.matchingAgentClientsForTab(tab, RESTORE_AGENT_MATCH_OPTIONS).find((candidate) =>
-        (candidate.kind === 'claude' || candidate.kind === 'codex') && candidate.agentSessionId);
-      if (!client?.agentSessionId) {
-        continue;
-      }
-
-      if (tab.lastKnownAgentKind !== client.kind || tab.lastKnownAgentSessionId !== client.agentSessionId) {
-        this.rememberAgent(tab, client.kind, client.agentSessionId);
+        if (wrappedAgentKind === 'claude') {
+          tab.lastKnownAgentLauncher = 'claude';
+        }
         changed = true;
       }
     }
     return changed;
-  }
-
-  private markObservedAgentKind(
-    terminal: TerminalInstance,
-    kind: RestorableAgentKind,
-    status: TerminalTabStatus,
-  ): void {
-    const tab = this.tabs.find((candidate) => candidate.terminal === terminal);
-    if (!tab) {
-      return;
-    }
-
-    tab.lastKnownAgentKind = kind;
-    if (status === 'claudex' || status === 'claude3' || (status === 'claude' && !tab.lastKnownAgentLauncher)) {
-      tab.lastKnownAgentLauncher = status;
-    }
-    if (!tab.lastKnownAgentSessionId) {
-      tab.lastKnownAgentProtectedUntilMs = Date.now() + RESTORED_AGENT_METADATA_GRACE_MS;
-    }
-  }
-
-  private preservedLastKnownAgent(tab: TerminalTabEntry): { kind: RestorableAgentKind; sessionId: string } | null {
-    const kind = tab.lastKnownAgentKind;
-    const sessionId = normalizeRestoredAgentSessionId(tab.lastKnownAgentSessionId);
-    if (!kind || !sessionId) {
-      return null;
-    }
-
-    if (Date.now() <= tab.lastKnownAgentProtectedUntilMs) {
-      return { kind, sessionId };
-    }
-
-    if (terminalStatusAgentKind(tab.status) === kind) {
-      return { kind, sessionId };
-    }
-
-    if (kind === 'claude' && tab.terminal.isClaudeCodeSession()) {
-      return { kind, sessionId };
-    }
-
-    const foreground = this.foregroundByTerminal.get(tab.terminal) ?? tab.terminal.getForeground();
-    return terminalStatusAgentKind(classifyForeground(foreground)) === kind
-      ? { kind, sessionId }
-      : null;
-  }
-
-  private claudeHookAgentForTab(tab: TerminalTabEntry): { kind: 'claude'; sessionId: string; cwd: string } | null {
-    if (!this.shouldUseClaudeHookFallback(tab)) {
-      return null;
-    }
-
-    const cwd = this.safeTerminalCwd(tab.terminal);
-    if (!cwd) {
-      return null;
-    }
-
-    const sessions = this.readHookAgentSessions();
-    const now = Date.now();
-    const match = sessions
-      .filter((session) =>
-        session.agent === 'claude'
-        && session.cwd === cwd
-        && session.sessionId
-        && session.updatedAtMs !== null
-        && now - session.updatedAtMs <= CLAUDE_HOOK_SESSION_LOOKBACK_MS)
-      .sort((left, right) => (right.updatedAtMs ?? 0) - (left.updatedAtMs ?? 0))[0];
-
-    return match?.sessionId ? { kind: 'claude', sessionId: match.sessionId, cwd } : null;
-  }
-
-  private shouldUseClaudeHookFallback(tab: TerminalTabEntry): boolean {
-    if (
-      tab.lastKnownAgentKind === 'claude'
-      || terminalStatusAgentKind(tab.status) === 'claude'
-      || tab.terminal.isClaudeCodeSession()
-    ) {
-      return true;
-    }
-
-    const foreground = this.foregroundByTerminal.get(tab.terminal) ?? tab.terminal.getForeground();
-    return terminalStatusAgentKind(classifyForeground(foreground)) === 'claude';
-  }
-
-  private readHookAgentSessions(): Array<{
-    agent: AgentKind;
-    sessionId: string | null;
-    cwd: string | null;
-    updatedAtMs: number | null;
-  }> {
-    try {
-      const file = this.path.join(this.homeDir, '.termy', 'agent-status', 'state.json');
-      const raw = JSON.parse(this.fs.readFileSync(file, 'utf8')) as { sessions?: unknown };
-      if (!raw.sessions || typeof raw.sessions !== 'object') {
-        return [];
-      }
-      return Object.values(raw.sessions).map((value) => this.normalizeHookAgentSession(value)).filter((session) =>
-        session !== null);
-    } catch {
-      return [];
-    }
-  }
-
-  private normalizeHookAgentSession(value: unknown): {
-    agent: AgentKind;
-    sessionId: string | null;
-    cwd: string | null;
-    updatedAtMs: number | null;
-  } | null {
-    if (!value || typeof value !== 'object') {
-      return null;
-    }
-
-    const record = value as {
-      agent?: unknown;
-      sessionId?: unknown;
-      cwd?: unknown;
-      updatedAtMs?: unknown;
-    };
-    if (record.agent !== 'claude' && record.agent !== 'codex') {
-      return null;
-    }
-
-    return {
-      agent: record.agent,
-      sessionId: typeof record.sessionId === 'string' && record.sessionId.trim() ? record.sessionId.trim() : null,
-      cwd: typeof record.cwd === 'string' && record.cwd.trim() ? record.cwd.trim() : null,
-      updatedAtMs: typeof record.updatedAtMs === 'number' && Number.isFinite(record.updatedAtMs)
-        ? record.updatedAtMs
-        : null,
-    };
-  }
-
-  private clearExpiredLastKnownAgent(terminal: TerminalInstance): void {
-    const tab = this.tabs.find((candidate) => candidate.terminal === terminal);
-    if (!tab || Date.now() <= tab.lastKnownAgentProtectedUntilMs) {
-      return;
-    }
-
-    tab.lastKnownAgentKind = null;
-    tab.lastKnownAgentLauncher = null;
-    tab.lastKnownAgentSessionId = null;
-    tab.lastKnownAgentProtectedUntilMs = 0;
   }
 
   private setTerminalTabStatus(terminal: TerminalInstance, status: TerminalTabStatus): void {
@@ -1270,12 +900,13 @@ export class TerminalView extends ItemView {
   ): void {
     const foregroundStatus = classifyForeground(info);
     const foregroundAgentKind = terminalStatusAgentKind(foregroundStatus);
+    const tab = this.tabs.find((candidate) => candidate.terminal === terminal);
     if (foregroundStatus !== 'none') {
       if (foregroundAgentKind !== 'claude') {
         terminal.resetClaudeCodeSession();
       }
-      if (foregroundAgentKind) {
-        this.markObservedAgentKind(terminal, foregroundAgentKind, foregroundStatus);
+      if (tab) {
+        tab.lastKnownAgentLauncher = this.restorableClaudeLauncher(foregroundStatus);
       }
       this.setTerminalTabStatus(terminal, foregroundStatus);
       return;
@@ -1283,12 +914,14 @@ export class TerminalView extends ItemView {
 
     if (isIdleShellForeground(info)) {
       terminal.resetClaudeCodeSession();
-      this.clearExpiredLastKnownAgent(terminal);
+      if (tab) {
+        tab.lastKnownAgentLauncher = null;
+      }
       this.setTerminalTabStatus(terminal, 'none');
       return;
     }
 
-    this.setTerminalTabStatus(terminal, terminal.isClaudeCodeSession() ? 'claude' : 'none');
+    this.setTerminalTabStatus(terminal, tab?.lastKnownAgentLauncher ?? 'none');
   }
 
   private async confirmCloseTabIfNeeded(terminal: TerminalInstance): Promise<boolean> {
@@ -1357,13 +990,7 @@ export class TerminalView extends ItemView {
   setActiveTab(index: number): void {
     if (index < 0 || index >= this.tabs.length) return;
     if (index === this.activeIndex) {
-      if (this.codexActivityEnabled) {
-        if (this.syncCodexActivitySelectionToActiveTab()) {
-          this.refreshCodexActivity();
-        }
-      } else {
-        this.tabs[index].terminal.focus();
-      }
+      this.tabs[index].terminal.focus();
       return;
     }
 
@@ -1376,7 +1003,6 @@ export class TerminalView extends ItemView {
 
     const terminal = this.tabs[index].terminal;
     this.terminalInstance = terminal;
-    this.syncCodexActivitySelectionToActiveTab();
     this.bindTerminalInstance(terminal);
     this.updateAppearanceStyles();
     this.setupResizeObserver();
@@ -1384,14 +1010,11 @@ export class TerminalView extends ItemView {
     window.setTimeout(() => {
       if (terminal.isAlive()) {
         terminal.fit();
-        if (!this.codexActivityEnabled) {
-          terminal.focus();
-        }
+        terminal.focus();
       }
     }, 0);
 
     this.renderTabBar();
-    this.refreshCodexActivity();
     this.updateLeafHeader(this.leaf);
     this.updateDropHintText();
     this.scheduleRestoreStatePersist();
@@ -1457,24 +1080,20 @@ export class TerminalView extends ItemView {
    * 渲染顶部 tab 栏
    */
   private renderTabBar(): void {
-    const bar = this.tabBarEl;
-    if (!bar) return;
-    bar.empty();
-    bar.toggleClass('is-single', this.tabs.length <= 1);
+    const list = this.tabListEl;
+    if (!list) return;
+    list.empty();
+    list.toggleClass('is-single', this.tabs.length <= 1);
 
     this.tabs.forEach((tab, i) => {
-      const tabEl = bar.createDiv('termy-tab');
+      const tabEl = list.createDiv('termy-tab');
       tabEl.toggleClass('is-active', i === this.activeIndex);
       tabEl.addEventListener('click', () => this.setActiveTab(i));
-      const tabAgentStatus = this.resolveTabAgentStatus(tab);
-      if (tabAgentStatus) {
-        tabEl.title = tabAgentStatus.clients
-          .map((client) => `${client.kind} ${agentStateLabel(client.state)} pid ${client.pid}`)
+      const tabAgentClients = this.matchingAgentClientsForTab(tab);
+      if (tabAgentClients.length > 0) {
+        tabEl.title = tabAgentClients
+          .map((client) => `${client.kind} pid ${client.pid}`)
           .join('\n');
-        if (shouldPaintTabAgentState(tabAgentStatus.state)) {
-          tabEl.addClass('has-agent-state');
-          tabEl.addClass(`is-agent-${agentStateClass(tabAgentStatus.state)}`);
-        }
       }
 
       // Tab number badge for Opt+number switching (1-9, tenth tab is 0).
@@ -1490,11 +1109,12 @@ export class TerminalView extends ItemView {
         || tab.status === 'claudex'
         || tab.status === 'claude3'
         || tab.status === 'codex'
+        || tab.status === 'codeck'
       ) {
         const statusEl = tabEl.createSpan('termy-tab-status');
         this.appendTabStatusIcon(statusEl, tab.status);
-        if (tab.status === 'tmux' && tabAgentStatus) {
-          for (const kind of uniqueAgentKinds(tabAgentStatus.clients)) {
+        if (tab.status === 'tmux') {
+          for (const kind of uniqueAgentKinds(tabAgentClients)) {
             this.appendTabStatusIcon(statusEl, kind);
           }
         }
@@ -1517,513 +1137,12 @@ export class TerminalView extends ItemView {
       });
     });
 
-    const addBtn = bar.createDiv('termy-tab-add');
+    const addBtn = list.createDiv('termy-tab-add');
     setIcon(addBtn, 'plus');
     addBtn.addEventListener('click', () => void this.addTab());
   }
 
-  private startCodexActivityPolling(): void {
-    this.stopCodexActivityPolling();
-    this.refreshCodexActivity();
-    this.codexActivityTimer = window.setInterval(() => {
-      this.refreshCodexActivity();
-    }, CODEX_ACTIVITY_POLL_MS);
-  }
-
-  private stopCodexActivityPolling(): void {
-    if (this.codexActivityTimer !== null) {
-      window.clearInterval(this.codexActivityTimer);
-      this.codexActivityTimer = null;
-    }
-    this.codexActivitySelectedSessionId = null;
-    this.codexActivitySources.clear();
-    this.codexActivityRenderKey = '';
-    this.renderCodexActivityPanel([]);
-  }
-
-  private refreshCodexActivity(): void {
-    if (!this.codexActivityEnabled) {
-      return;
-    }
-    const descriptors = collectCodexSessionDescriptors(this.latestAgentSnapshot?.clients ?? []);
-    const sessionIds = descriptors.map((descriptor) => descriptor.sessionId);
-    const activeSessionId = this.activeCodexSessionId();
-    this.codexActivitySelectedSessionId = reconcileCodexSessionSelection(
-      sessionIds,
-      this.codexActivitySelectedSessionId,
-      activeSessionId,
-    );
-
-    for (const sessionId of [...this.codexActivitySources.keys()]) {
-      if (!sessionIds.includes(sessionId)) {
-        this.codexActivitySources.delete(sessionId);
-      }
-    }
-    for (const descriptor of descriptors) {
-      this.refreshCodexActivitySource(this.codexActivitySource(descriptor.sessionId));
-    }
-    this.renderCodexActivityPanel(descriptors);
-  }
-
-  private codexActivitySource(sessionId: string): CodexActivitySource {
-    const existing = this.codexActivitySources.get(sessionId);
-    if (existing) {
-      return existing;
-    }
-    const source: CodexActivitySource = {
-      sessionId,
-      parser: new CodexSessionActivityParser(),
-      transcriptPath: null,
-      transcriptOffset: 0,
-      transcriptLoaded: false,
-      nextPathResolveAtMs: 0,
-      activity: null,
-    };
-    this.codexActivitySources.set(sessionId, source);
-    return source;
-  }
-
-  private refreshCodexActivitySource(source: CodexActivitySource): void {
-    if (!source.transcriptPath) {
-      if (Date.now() >= source.nextPathResolveAtMs) {
-        source.transcriptPath = this.resolveCodexTranscriptPath(source.sessionId);
-        source.nextPathResolveAtMs = Date.now() + CODEX_ACTIVITY_PATH_RETRY_MS;
-      }
-      if (!source.transcriptPath) {
-        source.activity = null;
-        return;
-      }
-    }
-
-    try {
-      const stat = this.fs.statSync(source.transcriptPath);
-      if (!stat.isFile()) {
-        throw new Error('Codex transcript is not a file');
-      }
-      if (stat.size < source.transcriptOffset) {
-        source.transcriptLoaded = false;
-        source.transcriptOffset = 0;
-        source.parser.reset();
-      }
-
-      if (!source.transcriptLoaded) {
-        const start = Math.max(0, stat.size - CODEX_ACTIVITY_MAX_READ_BYTES);
-        const chunk = this.readCodexTranscriptRange(
-          source.transcriptPath,
-          start,
-          stat.size - start,
-        );
-        source.parser.reset();
-        source.parser.push(chunk, start > 0);
-        source.transcriptOffset = stat.size;
-        source.transcriptLoaded = true;
-      } else if (stat.size > source.transcriptOffset) {
-        const unreadBytes = stat.size - source.transcriptOffset;
-        if (unreadBytes > CODEX_ACTIVITY_MAX_READ_BYTES) {
-          const start = stat.size - CODEX_ACTIVITY_MAX_READ_BYTES;
-          const chunk = this.readCodexTranscriptRange(
-            source.transcriptPath,
-            start,
-            CODEX_ACTIVITY_MAX_READ_BYTES,
-          );
-          source.parser.reset();
-          source.parser.push(chunk, true);
-        } else {
-          const chunk = this.readCodexTranscriptRange(
-            source.transcriptPath,
-            source.transcriptOffset,
-            unreadBytes,
-          );
-          source.parser.push(chunk);
-        }
-        source.transcriptOffset = stat.size;
-      }
-      source.activity = source.parser.getActivity();
-    } catch (error) {
-      debugLog('[TerminalView] Failed to read Codex session activity:', {
-        sessionId: source.sessionId,
-        error,
-      });
-      source.transcriptPath = null;
-      source.transcriptLoaded = false;
-      source.transcriptOffset = 0;
-      source.nextPathResolveAtMs = Date.now() + CODEX_ACTIVITY_PATH_RETRY_MS;
-      source.activity = null;
-    }
-  }
-
-  private activeCodexSessionId(): string | null {
-    const tab = this.tabs[this.activeIndex];
-    return tab ? this.codexSessionIdsForTab(tab)[0] ?? null : null;
-  }
-
-  private codexSessionIdsForTab(tab: TerminalTabEntry): string[] {
-    const sessionIds: string[] = [];
-    for (const client of this.matchingAgentClientsForTab(tab, RESTORE_AGENT_MATCH_OPTIONS)) {
-      if (client.kind !== 'codex' || !client.agentSessionId) {
-        continue;
-      }
-      this.rememberAgentClient(tab, client);
-      if (!sessionIds.includes(client.agentSessionId)) {
-        sessionIds.push(client.agentSessionId);
-      }
-    }
-
-    const rememberedSessionId = tab.lastKnownAgentKind === 'codex'
-      ? normalizeRestoredAgentSessionId(tab.lastKnownAgentSessionId)
-      : null;
-    if (sessionIds.length === 0 && rememberedSessionId) {
-      sessionIds.push(rememberedSessionId);
-    }
-    return sessionIds;
-  }
-
-  private syncCodexActivitySelectionToActiveTab(): boolean {
-    if (!this.codexActivityEnabled) {
-      return false;
-    }
-    const tab = this.tabs[this.activeIndex];
-    if (!tab) {
-      return false;
-    }
-    const sessionIds = this.codexSessionIdsForTab(tab);
-    if (sessionIds.length === 0 || (
-      this.codexActivitySelectedSessionId
-      && sessionIds.includes(this.codexActivitySelectedSessionId)
-    )) {
-      return false;
-    }
-    this.codexActivitySelectedSessionId = sessionIds[0];
-    this.codexActivityRenderKey = '';
-    return true;
-  }
-
-  private tabIndexForCodexSession(sessionId: string): number {
-    return this.tabs.findIndex((tab) => this.codexSessionIdsForTab(tab).includes(sessionId));
-  }
-
-  private resolveCodexTranscriptPath(sessionId: string): string | null {
-    if (!/^[A-Za-z0-9-]+$/.test(sessionId)) {
-      return null;
-    }
-
-    const cached = this.codexTranscriptPathCache.get(sessionId);
-    if (cached && this.fs.existsSync(cached)) {
-      return cached;
-    }
-
-    const codexDir = this.path.join(this.homeDir, '.codex');
-    for (const root of [
-      this.path.join(codexDir, 'sessions'),
-      this.path.join(codexDir, 'archived_sessions'),
-    ]) {
-      const match = this.findCodexTranscriptInDirectory(root, sessionId);
-      if (match) {
-        this.codexTranscriptPathCache.set(sessionId, match);
-        return match;
-      }
-    }
-    return null;
-  }
-
-  private findCodexTranscriptInDirectory(directory: string, sessionId: string): string | null {
-    let entries: import('fs').Dirent[];
-    try {
-      entries = this.fs.readdirSync(directory, { withFileTypes: true })
-        .sort((left, right) => right.name.localeCompare(left.name));
-    } catch {
-      return null;
-    }
-
-    for (const entry of entries) {
-      if (entry.isFile() && entry.name.endsWith('.jsonl') && entry.name.includes(sessionId)) {
-        return this.path.join(directory, entry.name);
-      }
-    }
-    for (const entry of entries) {
-      if (!entry.isDirectory()) {
-        continue;
-      }
-      const match = this.findCodexTranscriptInDirectory(this.path.join(directory, entry.name), sessionId);
-      if (match) {
-        return match;
-      }
-    }
-    return null;
-  }
-
-  private readCodexTranscriptRange(file: string, start: number, length: number): string {
-    if (length <= 0) {
-      return '';
-    }
-    const descriptor = this.fs.openSync(file, 'r');
-    try {
-      const buffer = Buffer.allocUnsafe(length);
-      const bytesRead = this.fs.readSync(descriptor, buffer, 0, length, start);
-      return buffer.toString('utf8', 0, bytesRead);
-    } finally {
-      this.fs.closeSync(descriptor);
-    }
-  }
-
-  private renderCodexActivityPanel(descriptors: CodexSessionDescriptor[]): void {
-    const panel = this.codexActivityEl;
-    if (!panel) {
-      return;
-    }
-
-    panel.toggleClass('is-visible', this.codexActivityEnabled);
-    panel.setAttribute('aria-hidden', String(!this.codexActivityEnabled));
-    const renderKey = this.codexActivityEnabled
-      ? JSON.stringify([
-        this.codexActivitySelectedSessionId,
-        descriptors,
-        descriptors.map((descriptor) => this.codexActivitySources.get(descriptor.sessionId)?.activity ?? null),
-      ])
-      : 'hidden';
-    if (renderKey === this.codexActivityRenderKey) {
-      return;
-    }
-    this.codexActivityRenderKey = renderKey;
-
-    this.resetCodexActivityMarkdownComponent();
-    panel.empty();
-    if (!this.codexActivityEnabled) {
-      return;
-    }
-
-    const sessionsPane = panel.createDiv('termy-codex-session-pane');
-    const sessionList = sessionsPane.createDiv('termy-codex-session-list');
-    sessionList.setAttribute('role', 'listbox');
-    sessionList.setAttribute('aria-label', t('terminal.sessionActivity.sessions'));
-    if (descriptors.length === 0) {
-      sessionList.createDiv({
-        cls: 'termy-codex-session-empty',
-        text: t('terminal.sessionActivity.noSessions'),
-      });
-    }
-
-    for (const descriptor of descriptors) {
-      const activity = this.codexActivitySources.get(descriptor.sessionId)?.activity ?? null;
-      const state = resolveCodexSessionPanelState(descriptor.clientState, activity?.state ?? null);
-      const selected = descriptor.sessionId === this.codexActivitySelectedSessionId;
-      const row = sessionList.createDiv(`termy-codex-session-item is-${this.codexPanelStateClass(state)}`);
-      row.toggleClass('is-selected', selected);
-      row.setAttribute('role', 'option');
-      row.setAttribute('aria-selected', String(selected));
-      row.setAttribute('data-session-id', descriptor.sessionId);
-      if (selected) {
-        row.ownerDocument.defaultView?.requestAnimationFrame(() => {
-          row.scrollIntoView({ block: 'nearest' });
-        });
-      }
-      row.addEventListener('click', (event) => {
-        event.stopPropagation();
-        this.selectCodexActivitySession(descriptor.sessionId, descriptors);
-      });
-
-      row.createSpan('termy-codex-session-cursor').setText(selected ? '›' : '');
-      row.createSpan('termy-codex-session-state-dot');
-      row.createDiv({
-        cls: 'termy-codex-session-title',
-        text: this.codexSessionTitle(descriptor, activity),
-      });
-      if (descriptor.cwd) {
-        row.createSpan({
-          cls: 'termy-codex-session-cwd',
-          text: this.path.basename(descriptor.cwd) || descriptor.cwd,
-        });
-      }
-    }
-
-    const detailPane = panel.createDiv('termy-codex-detail-pane');
-    const selectedDescriptor = descriptors.find(
-      (descriptor) => descriptor.sessionId === this.codexActivitySelectedSessionId,
-    ) ?? null;
-    if (!selectedDescriptor) {
-      detailPane.createDiv({
-        cls: 'termy-codex-detail-empty',
-        text: t('terminal.sessionActivity.selectSession'),
-      });
-      return;
-    }
-
-    const activity = this.codexActivitySources.get(selectedDescriptor.sessionId)?.activity ?? null;
-    const state = activity?.state ?? 'idle';
-    const markdownComponent = this.createCodexActivityMarkdownComponent();
-    const body = detailPane.createDiv({ cls: ['termy-codex-activity-body', 'markdown-rendered'] });
-    const promptRow = body.createDiv('termy-codex-activity-row is-prompt');
-    const promptLabel = promptRow.createSpan({ cls: 'termy-codex-activity-label', text: '🎯' });
-    promptLabel.title = t('terminal.sessionActivity.task');
-    promptLabel.setAttribute('aria-label', t('terminal.sessionActivity.task'));
-    const prompt = promptRow.createDiv({ cls: ['termy-codex-activity-prompt', 'markdown-rendered'] });
-    if (activity?.prompt) {
-      void MarkdownRenderer.render(this.app, activity.prompt, prompt, '', markdownComponent)
-        .catch((error) => errorLog('[TerminalView] Failed to render Codex prompt Markdown:', error));
-    } else {
-      prompt.setText(t('terminal.sessionActivity.waitingPrompt'));
-    }
-
-    const conversationRow = body.createDiv('termy-codex-activity-row is-conversation');
-    const conversation = conversationRow.createDiv('termy-codex-activity-conversation');
-    const updates = activity?.updates.slice(-CODEX_ACTIVITY_VISIBLE_UPDATES) ?? [];
-    const hasCompletion = state === 'complete' || state === 'aborted';
-    const renderPromises: Array<Promise<void>> = [];
-    if (updates.length === 0 && !hasCompletion) {
-      conversation.createDiv({
-        cls: 'termy-codex-activity-placeholder',
-        text: state === 'running' || state === 'idle'
-          ? t('terminal.sessionActivity.waitingProgress')
-          : t('terminal.sessionActivity.noProgress'),
-      });
-    } else {
-      for (const update of updates) {
-        const updateEl = conversation.createDiv('termy-codex-activity-update');
-        updateEl.toggleClass('is-reasoning-summary', update.kind === 'reasoning-summary');
-        const updateLabel = updateEl.createSpan({
-          cls: 'termy-codex-activity-label',
-          text: update.kind === 'reasoning-summary' ? '🧠' : '💬',
-        });
-        updateLabel.title = t('terminal.sessionActivity.progress');
-        updateLabel.setAttribute('aria-label', t('terminal.sessionActivity.progress'));
-        const updateText = updateEl.createDiv({
-          cls: ['termy-codex-activity-update-text', 'markdown-rendered'],
-        });
-        renderPromises.push(
-          MarkdownRenderer.render(this.app, update.text, updateText, '', markdownComponent)
-            .catch((error) => errorLog('[TerminalView] Failed to render Codex activity Markdown:', error)),
-        );
-      }
-    }
-
-    if (hasCompletion) {
-      const completionRow = conversation.createDiv('termy-codex-activity-update is-final-reply');
-      const completionLabel = completionRow.createSpan({
-        cls: 'termy-codex-activity-label',
-        text: state === 'complete' ? '✅' : '⏹️',
-      });
-      const completedText = state === 'complete'
-        ? t('terminal.sessionActivity.completed')
-        : t('terminal.sessionActivity.aborted');
-      completionLabel.title = completedText;
-      completionLabel.setAttribute('aria-label', completedText);
-      const completion = completionRow.createDiv({
-        cls: ['termy-codex-activity-completion', 'markdown-rendered'],
-      });
-      if (state === 'complete' && activity?.finalAnswer) {
-        renderPromises.push(
-          MarkdownRenderer.render(this.app, activity.finalAnswer, completion, '', markdownComponent)
-            .catch((error) => errorLog('[TerminalView] Failed to render Codex final answer Markdown:', error)),
-        );
-      } else {
-        completion.setText(completedText);
-      }
-    }
-
-    void Promise.all(renderPromises).then(() => this.scrollCodexActivityConversationToBottom(conversation));
-  }
-
-  private handleCodexActivityKeydown(event: KeyboardEvent): void {
-    if (!this.codexActivityEnabled) {
-      return;
-    }
-    if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') {
-      return;
-    }
-
-    event.preventDefault();
-    event.stopPropagation();
-    const descriptors = collectCodexSessionDescriptors(this.latestAgentSnapshot?.clients ?? []);
-    const nextSessionId = moveCodexSessionSelection(
-      descriptors.map((descriptor) => descriptor.sessionId),
-      this.codexActivitySelectedSessionId,
-      event.key === 'ArrowUp' ? -1 : 1,
-    );
-    if (nextSessionId) {
-      this.selectCodexActivitySession(nextSessionId, descriptors);
-    }
-  }
-
-  private selectCodexActivitySession(
-    sessionId: string,
-    descriptors: CodexSessionDescriptor[],
-  ): void {
-    const selectionChanged = sessionId !== this.codexActivitySelectedSessionId;
-    this.codexActivitySelectedSessionId = sessionId;
-    const linkedTabIndex = this.tabIndexForCodexSession(sessionId);
-    if (linkedTabIndex >= 0 && linkedTabIndex !== this.activeIndex) {
-      this.setActiveTab(linkedTabIndex);
-      return;
-    }
-    if (selectionChanged) {
-      this.codexActivityRenderKey = '';
-      this.renderCodexActivityPanel(descriptors);
-    }
-  }
-
-  private codexSessionTitle(
-    descriptor: CodexSessionDescriptor,
-    activity: CodexSessionActivity | null,
-  ): string {
-    const promptLine = activity?.prompt?.split('\n').find((line) => line.trim())?.trim();
-    if (promptLine) {
-      return promptLine;
-    }
-    if (descriptor.title) {
-      return descriptor.title;
-    }
-    if (descriptor.cwd) {
-      return this.path.basename(descriptor.cwd) || descriptor.cwd;
-    }
-    return descriptor.sessionId.slice(0, 8);
-  }
-
-  private codexPanelStateClass(state: CodexSessionPanelState): string {
-    return state.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`);
-  }
-
-  private scrollCodexActivityConversationToBottom(conversation: HTMLElement): void {
-    const hostWindow = conversation.ownerDocument.defaultView;
-    if (!hostWindow) {
-      conversation.scrollTop = conversation.scrollHeight;
-      return;
-    }
-
-    // Markdown rendering and theme styles can settle across two frames. Pinning
-    // on both keeps the newest public progress visible without a smooth-scroll jump.
-    hostWindow.requestAnimationFrame(() => {
-      conversation.scrollTop = conversation.scrollHeight;
-      hostWindow.requestAnimationFrame(() => {
-        conversation.scrollTop = conversation.scrollHeight;
-      });
-    });
-  }
-
-  private createCodexActivityMarkdownComponent(): Component {
-    this.resetCodexActivityMarkdownComponent();
-    const component = new Component();
-    this.addChild(component);
-    this.codexActivityMarkdownComponent = component;
-    return component;
-  }
-
-  private resetCodexActivityMarkdownComponent(): void {
-    const component = this.codexActivityMarkdownComponent;
-    if (!component) {
-      return;
-    }
-    this.codexActivityMarkdownComponent = null;
-    this.removeChild(component);
-  }
-
-  private resolveTabAgentStatus(tab: TerminalTabEntry): TerminalTabAgentStatus | null {
-    return aggregateTabAgentStatus(this.matchingAgentClientsForTab(tab));
-  }
-
-  private matchingAgentClientsForTab(
-    tab: TerminalTabEntry,
-    options: DirectTerminalAgentMatchOptions = {},
-  ): AgentClient[] {
+  private matchingAgentClientsForTab(tab: TerminalTabEntry): AgentClient[] {
     const snapshot = this.latestAgentSnapshot;
     if (!snapshot || snapshot.clients.length === 0) {
       return [];
@@ -2044,9 +1163,7 @@ export class TerminalView extends ItemView {
       status: tab.status,
       foreground: info,
       clients,
-      lastKnownAgentKind: tab.lastKnownAgentKind,
-      lastKnownAgentSessionId: tab.lastKnownAgentSessionId,
-    }, options);
+    });
   }
 
   private appendTabStatusIcon(parent: HTMLElement, status: 'tmux' | AgentTerminalTabStatus): void {
@@ -2083,10 +1200,6 @@ export class TerminalView extends ItemView {
   getTabCount(): number { return this.tabs.length; }
 
   focusActiveTerminalSoon(): void {
-    if (this.codexActivityEnabled) {
-      this.clearPendingFocusTimeouts();
-      return;
-    }
     this.clearPendingFocusTimeouts();
     for (const delay of TERMINAL_FOCUS_RETRY_DELAYS_MS) {
       const timeout = window.setTimeout(() => {
@@ -2117,9 +1230,6 @@ export class TerminalView extends ItemView {
     if (!this.contentEl.contains(activeElement)) {
       return false;
     }
-    if (activeElement === this.codexActivityEl && !this.codexActivityEnabled) {
-      return false;
-    }
     if (activeElement.classList.contains('xterm-helper-textarea')) {
       return false;
     }
@@ -2128,9 +1238,6 @@ export class TerminalView extends ItemView {
 
   /** 聚焦当前 active 终端（供切回 Obsidian 标签时自动 focus，避免焦点卡在标签头按钮上） */
   focusActiveTerminal(): void {
-    if (this.codexActivityEnabled) {
-      return;
-    }
     if (this.shouldPreserveCurrentFocus()) {
       return;
     }

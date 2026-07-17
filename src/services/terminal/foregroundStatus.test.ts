@@ -12,6 +12,7 @@ test('classifyForeground detects local foreground processes only', () => {
   assert.equal(classifyForeground({ name: 'ssh', cmdline: 'ssh example.com', pid: null }), 'ssh');
   assert.equal(classifyForeground({ name: 'claude', cmdline: 'claude', pid: null }), 'claude');
   assert.equal(classifyForeground({ name: 'codex', cmdline: 'codex resume', pid: null }), 'codex');
+  assert.equal(classifyForeground({ name: 'codeck', cmdline: 'codeck', pid: null }), 'codeck');
   assert.equal(classifyForeground({ name: 'zsh', cmdline: '-zsh', pid: null }), 'none');
 });
 
@@ -32,6 +33,7 @@ test('classifyCommandText distinguishes claudex and claude3 wrappers', () => {
   assert.equal(classifyCommandText('/Users/example/.local/bin/claudex', 'claudex --resume'), 'claudex');
   assert.equal(classifyCommandText('claude3', 'claude3'), 'claude3');
   assert.equal(classifyCommandText('/Users/example/.local/bin/claude3', 'claude3 --resume'), 'claude3');
+  assert.equal(classifyCommandText('c3', 'c3 agents'), 'claude3');
 });
 
 test('classifyCommandText detects Python-launched wrapper symlinks', () => {
@@ -64,5 +66,6 @@ test('terminalStatusAgentKind keeps wrapper visuals on the Claude agent path', (
   assert.equal(terminalStatusAgentKind('claudex'), 'claude');
   assert.equal(terminalStatusAgentKind('claude3'), 'claude');
   assert.equal(terminalStatusAgentKind('codex'), 'codex');
+  assert.equal(terminalStatusAgentKind('codeck'), null);
   assert.equal(terminalStatusAgentKind('tmux'), null);
 });

@@ -32,7 +32,10 @@ function createKeyboardEvent(
   return event;
 }
 
-function createProtocolHarness(overrides: Partial<EnhancedKeyboardProtocolHandlers> = {}) {
+function createProtocolHarness(
+  overrides: Partial<EnhancedKeyboardProtocolHandlers> = {},
+  decisionContext: ConstructorParameters<typeof EnhancedKeyboardProtocol>[1] = {},
+) {
   const queuedInput: string[] = [];
   const binaryWrites: Uint8Array[] = [];
   const insertedTexts: string[] = [];
@@ -86,7 +89,7 @@ function createProtocolHarness(overrides: Partial<EnhancedKeyboardProtocolHandle
   };
 
   return {
-    protocol: new EnhancedKeyboardProtocol(handlers),
+    protocol: new EnhancedKeyboardProtocol(handlers, decisionContext),
     queuedInput,
     binaryWrites,
     insertedTexts,
@@ -144,6 +147,12 @@ function createWin32ProtocolHarness() {
 test('evaluateKeyboardDecision keeps Ctrl+C without selection on the xterm default path', () => {
   const event = createKeyboardEvent('c', { ctrlKey: true });
   const decision = evaluateKeyboardDecision(event, { hasSelection: false });
+  assert.deepEqual(decision, { type: 'allow-default' });
+});
+
+test('evaluateKeyboardDecision keeps Ctrl+C with a stale selection on the terminal path', () => {
+  const event = createKeyboardEvent('c', { ctrlKey: true });
+  const decision = evaluateKeyboardDecision(event, { hasSelection: true });
   assert.deepEqual(decision, { type: 'allow-default' });
 });
 
@@ -213,8 +222,8 @@ test('evaluateKeyboardDecision maps Shift+Enter to paste-newline even in win32-i
   assert.deepEqual(decision, { type: 'paste-newline' });
 });
 
-test('handleKeyboardEvent copies the current selection and blocks xterm default handling', async () => {
-  const harness = createProtocolHarness();
+test('handleKeyboardEvent copies the current selection in win32 input mode', async () => {
+  const harness = createProtocolHarness({}, { shiftEnterMode: 'win32-input-mode' });
   const event = createKeyboardEvent('c', { ctrlKey: true });
 
   const allowed = harness.protocol.handleKeyboardEvent(event);

@@ -135,12 +135,11 @@ export function evaluateKeyboardDecision(
     return { type: 'allow-default' };
   }
 
+  // Ctrl belongs to the terminal program on the normal xterm path. Cmd+C is
+  // Termy's copy shortcut on macOS, so a stale xterm selection must not swallow
+  // Ctrl+C before fullscreen TUIs can receive their interrupt/exit key.
   if (event.ctrlKey && event.key === 'c') {
-    if (!context.hasSelection) {
-      return { type: 'allow-default' };
-    }
-
-    return { type: 'copy-selection' };
+    return { type: 'allow-default' };
   }
 
   if (event.ctrlKey && event.key === 'v') {

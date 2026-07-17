@@ -40,24 +40,6 @@ export const ja: TranslationKeys = {
       next: '次へ',
       close: '閉じる',
     },
-    sessionActivity: {
-      sessions: 'Codex セッション',
-      noSessions: 'アクティブな Codex セッションがありません。',
-      selectSession: 'Codex セッションを選択して進捗を確認します。',
-      task: 'タスク',
-      progress: '進行状況',
-      waitingPrompt: '現在のプロンプトを待機中...',
-      waitingProgress: 'Codex が処理中...',
-      noProgress: 'このターンには公開された進捗がありません。',
-      needsInput: '要入力',
-      working: '作業中',
-      idle: '待機中',
-      unknown: '不明',
-      completed: '完了',
-      aborted: '中止',
-      showPanel: 'Codex セッションパネルを表示',
-      hidePanel: 'Codex セッションパネルを非表示',
-    },
     contextMenu: {
       copy: 'コピー',
       copyAsPlainText: 'プレーンテキストでコピー',
@@ -83,7 +65,6 @@ export const ja: TranslationKeys = {
 
   commands: {
     openTerminal: 'Termyターミナルを開く',
-    toggleCodexActivityPanel: 'Codex セッションパネルを切り替え',
     showChangelog: 'Termy: 更新ログを表示',
     terminalSearch: 'ターミナル: 検索',
     terminalClear: 'ターミナル: 画面をクリア',

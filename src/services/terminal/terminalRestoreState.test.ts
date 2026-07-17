@@ -11,35 +11,16 @@ import {
   type TerminalRestoreSnapshot,
 } from './terminalRestoreState.ts';
 
-test('TerminalRestoreStore saves and loads tabs per local vault', async () => {
+test('TerminalRestoreStore saves supported launchers per local vault', async () => {
   const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'termy-restore-'));
   const primary = store(homeDir, '/vault/one');
   const secondary = store(homeDir, '/vault/two');
 
-  await primary.saveSnapshot(snapshot([{
-    customName: 'Agent',
-    cwd: '/Users/example/lab/termy',
-    agentKind: 'claude',
-    agentLauncher: 'claudex',
-    agentSessionId: 'claude-session-one',
-    title: 'Claude Code',
-    updatedAtMs: 100,
-  }], 0));
-  await secondary.saveSnapshot(snapshot([{
-    customName: null,
-    cwd: '/Users/example/lab/other',
-    agentKind: 'codex',
-    agentLauncher: null,
-    agentSessionId: 'codex-session-two',
-    title: 'Codex',
-    updatedAtMs: 200,
-  }], 0));
+  await primary.saveSnapshot(snapshot([tab('claude', 'claude3', '/Users/example/lab/termy')], 0));
+  await secondary.saveSnapshot(snapshot([tab('codeck', null, '/Users/example/lab/codeck')], 0));
 
-  const restoredClaude = (await primary.loadSnapshot()).tabs[0];
-  assert.equal(restoredClaude?.agentKind, 'claude');
-  assert.equal(restoredClaude?.agentLauncher, 'claudex');
-  assert.equal(restoredClaude?.agentSessionId, null);
-  assert.equal((await secondary.loadSnapshot()).tabs[0]?.agentKind, 'codex');
+  assert.deepEqual((await primary.loadSnapshot()).tabs[0], tab('claude', 'claude3', '/Users/example/lab/termy'));
+  assert.deepEqual((await secondary.loadSnapshot()).tabs[0], tab('codeck', null, '/Users/example/lab/codeck'));
 });
 
 test('TerminalRestoreStore clears only the current vault snapshot', async () => {
@@ -47,92 +28,47 @@ test('TerminalRestoreStore clears only the current vault snapshot', async () => 
   const primary = store(homeDir, '/vault/one');
   const secondary = store(homeDir, '/vault/two');
 
-  await primary.saveSnapshot(snapshot([{
-    customName: 'Claude',
-    cwd: '/tmp/one',
-    agentKind: 'claude',
-    agentLauncher: 'claude3',
-    agentSessionId: 'claude-session-one',
-    title: 'Claude',
-    updatedAtMs: 100,
-  }], 0));
-  await secondary.saveSnapshot(snapshot([{
-    customName: 'Codex',
-    cwd: '/tmp/two',
-    agentKind: 'codex',
-    agentLauncher: null,
-    agentSessionId: 'codex-session-two',
-    title: 'Codex',
-    updatedAtMs: 100,
-  }], 0));
-
+  await primary.saveSnapshot(snapshot([tab('claude', 'claude', '/tmp/one')], 0));
+  await secondary.saveSnapshot(snapshot([tab('codeck', null, '/tmp/two')], 0));
   await primary.clearSnapshot();
 
   assert.equal((await primary.loadSnapshot()).tabs.length, 0);
-  assert.equal((await secondary.loadSnapshot()).tabs[0]?.agentKind, 'codex');
+  assert.equal((await secondary.loadSnapshot()).tabs[0]?.agentKind, 'codeck');
 });
 
-test('TerminalRestoreStore normalizes malformed files', async () => {
+test('TerminalRestoreStore drops legacy claudex and Codex resume metadata', async () => {
   const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'termy-restore-'));
   const restoreDir = path.join(homeDir, '.termy');
   fs.mkdirSync(restoreDir, { recursive: true });
-  fs.writeFileSync(path.join(restoreDir, 'terminal-restore.json'), '{"vaults":[{"vaultPath":"/vault","activeIndex":99,"tabs":[{"agentKind":"bad"},{"agentKind":"codex","agentSessionId":"codex-session","cwd":"/tmp","updatedAtMs":5}]}]}');
+  fs.writeFileSync(path.join(restoreDir, 'terminal-restore.json'), JSON.stringify({
+    vaults: [{
+      vaultPath: '/vault',
+      activeIndex: 0,
+      tabs: [
+        { agentKind: 'claude', agentLauncher: 'claudex', cwd: '/tmp/x', updatedAtMs: 1 },
+        { agentKind: 'codex', agentSessionId: 'legacy-session', cwd: '/tmp/codex', updatedAtMs: 2 },
+        { agentKind: 'claude', cwd: '/tmp/claude', updatedAtMs: 3 },
+      ],
+    }],
+  }));
 
   const restored = await store(homeDir, '/vault').loadSnapshot();
 
-  assert.equal(restored.activeIndex, 0);
-  assert.equal(restored.tabs.length, 1);
-  assert.equal(restored.tabs[0]?.agentKind, 'codex');
+  assert.deepEqual(restored.tabs.map((entry) => [entry.agentKind, entry.agentLauncher]), [
+    [null, null],
+    [null, null],
+    ['claude', 'claude'],
+  ]);
 });
 
-test('TerminalRestoreStore upgrades legacy Claude snapshots to agents mode', async () => {
-  const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'termy-restore-'));
-  const restoreDir = path.join(homeDir, '.termy');
-  fs.mkdirSync(restoreDir, { recursive: true });
-  fs.writeFileSync(
-    path.join(restoreDir, 'terminal-restore.json'),
-    JSON.stringify({
-      vaults: [{
-        vaultPath: '/vault',
-        activeIndex: 0,
-        tabs: [{
-          agentKind: 'claude',
-          agentSessionId: 'legacy-session',
-          cwd: '/tmp',
-          updatedAtMs: 5,
-        }],
-      }],
-    }),
-  );
-
-  const restored = await store(homeDir, '/vault').loadSnapshot();
-
-  assert.equal(restored.tabs[0]?.agentLauncher, 'claude');
-  assert.equal(restored.tabs[0]?.agentSessionId, null);
-  assert.equal(hasRestorableAgentTabs(restored), true);
-});
-
-test('restored agent helpers open Claude launchers in agents mode and keep Codex session resume', () => {
+test('restored agent helpers only open Claude agents, c3 agents, and Codeck', () => {
   assert.equal(hasRestorableAgentTabs(snapshot([], 0)), false);
-  assert.equal(hasRestorableAgentTabs(snapshot([{
-    customName: null,
-    cwd: '/tmp',
-    agentKind: 'claude',
-    agentLauncher: 'claude',
-    agentSessionId: null,
-    title: 'Claude',
-    updatedAtMs: 100,
-  }], 0)), true);
-  assert.equal(restoredAgentCommand('claude', 'claude', null), 'claude agents');
-  assert.equal(restoredAgentCommand('claude', 'claudex', 'ignored-session'), 'claudex agents');
-  assert.equal(restoredAgentCommand('claude', 'claude3', null), 'claude3 agents');
-  assert.equal(restoredAgentCommand('claude', null, null), 'claude agents');
-  assert.equal(restoredAgentCommand('codex', null, 'codex-session'), 'codex resume codex-session');
-  assert.equal(
-    restoredAgentCommand('codex', null, 'codex-session', '/Users/example/My Project'),
-    "codex resume --cd '/Users/example/My Project' codex-session",
-  );
-  assert.equal(restoredAgentCommand('codex', null, null), null);
+  assert.equal(hasRestorableAgentTabs(snapshot([tab('claude', 'claude', '/tmp')], 0)), true);
+  assert.equal(hasRestorableAgentTabs(snapshot([tab('codeck', null, '/tmp')], 0)), true);
+  assert.equal(restoredAgentCommand('claude', 'claude'), 'claude agents');
+  assert.equal(restoredAgentCommand('claude', 'claude3'), 'c3 agents');
+  assert.equal(restoredAgentCommand('claude', null), 'claude agents');
+  assert.equal(restoredAgentCommand('codeck', null), 'codeck');
 });
 
 function store(homeDir: string, vaultPath: string): TerminalRestoreStore {
@@ -144,6 +80,21 @@ function store(homeDir: string, vaultPath: string): TerminalRestoreStore {
     vaultPath,
     now: () => 1_700_000_000_000,
   });
+}
+
+function tab(
+  agentKind: 'claude' | 'codeck' | null,
+  agentLauncher: 'claude' | 'claude3' | null,
+  cwd: string,
+): TerminalRestoreSnapshot['tabs'][number] {
+  return {
+    customName: null,
+    cwd,
+    agentKind,
+    agentLauncher,
+    title: null,
+    updatedAtMs: 1_700_000_000_000,
+  };
 }
 
 function snapshot(
