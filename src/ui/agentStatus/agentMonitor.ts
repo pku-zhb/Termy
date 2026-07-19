@@ -109,10 +109,6 @@ function creditWindows(credit: AgentCreditStatus | null): AgentCreditWindow[] {
 function appendWindowMeters(parent: HTMLElement, productName: string, window: AgentCreditWindow): void {
   const group = parent.createSpan(`termy-agent-credit-window is-${window.id}`);
   group.title = `${productName} ${window.label}: usage ${displayPercent(window.usedPercent)}, reset ${displayResetTime(window.resetAtMs)}`;
-  group.createSpan({
-    cls: 'termy-agent-credit-window-label',
-    text: `${window.label} ${displayCompactPercent(window.usedPercent)}`,
-  });
   appendMeter(group, window.usedPercent, `${productName} ${window.label} usage`, 'is-usage');
   appendMeter(
     group,
@@ -154,10 +150,6 @@ function creditTooltip(productName: string, credit: AgentCreditStatus): string {
 
 function displayPercent(percent: number | null): string {
   return percent === null ? 'n/a' : `${percent}%`;
-}
-
-function displayCompactPercent(percent: number | null): string {
-  return percent === null ? '--' : String(percent);
 }
 
 function usedPercent(remainingPercent: number | null): number | null {
