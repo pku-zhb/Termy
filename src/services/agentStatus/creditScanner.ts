@@ -1,6 +1,10 @@
 import { classifyCodexRateLimitWindows } from './codexRateLimits.ts';
 import type { AgentStatusRuntime } from './runtime.ts';
-import type { AgentCreditSnapshot, AgentCreditStatus } from './types.ts';
+import type { AgentCreditSnapshot, AgentCreditStatus, AgentCreditWindow } from './types.ts';
+
+const FIVE_HOURS_MS = 5 * 60 * 60 * 1000;
+const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
+const CLAUDE_USAGE_CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
 export class CreditScanner {
   private readonly runtime: AgentStatusRuntime;
@@ -10,12 +14,91 @@ export class CreditScanner {
   }
 
   async scan(): Promise<AgentCreditSnapshot> {
-    const codex = await this.codexCreditStatus();
+    const [claude, codex] = await Promise.all([
+      this.claudeCreditStatus(),
+      this.codexCreditStatus(),
+    ]);
 
     return {
       generatedAtMs: Date.now(),
+      claude,
       codex,
     };
+  }
+
+  private async claudeCreditStatus(): Promise<AgentCreditStatus | null> {
+    const raw = await this.runtime.readTextFile(this.claudeConfigJsonPath());
+    const config = parseJson<Record<string, unknown>>(raw);
+    const cachedUsage = recordValue(config?.cachedUsageUtilization);
+    if (!cachedUsage) {
+      return null;
+    }
+
+    const fetchedAtMs = numberValue(cachedUsage.fetchedAtMs);
+    if (fetchedAtMs !== null && Date.now() - fetchedAtMs > CLAUDE_USAGE_CACHE_MAX_AGE_MS) {
+      return null;
+    }
+
+    const utilization = recordValue(cachedUsage.utilization);
+    if (!utilization) {
+      return null;
+    }
+
+    const windows = this.claudeCreditWindows(utilization);
+    if (windows.length === 0) {
+      return null;
+    }
+
+    const fiveHour = windows.find((window) => window.id === 'five-hour') ?? null;
+    const weekly = windows.find((window) => window.id === 'weekly-all') ?? null;
+
+    return {
+      fiveHourRemainingPercent: remainingPercentFromUsedPercent(fiveHour?.usedPercent),
+      weeklyRemainingPercent: remainingPercentFromUsedPercent(weekly?.usedPercent),
+      fiveHourResetAtMs: fiveHour?.resetAtMs ?? null,
+      weeklyResetAtMs: weekly?.resetAtMs ?? null,
+      unlimited: false,
+      source: 'claude-cache',
+      windows,
+    };
+  }
+
+  private claudeConfigJsonPath(): string {
+    const configDir = envString('CLAUDE_CONFIG_DIR')?.trim();
+    if (!configDir) {
+      return `${this.runtime.homeDir}/.claude.json`;
+    }
+
+    const expanded = configDir === '~'
+      ? this.runtime.homeDir
+      : configDir.startsWith('~/')
+        ? `${this.runtime.homeDir}/${configDir.slice(2)}`
+        : configDir;
+    return `${expanded}.json`;
+  }
+
+  private claudeCreditWindows(utilization: Record<string, unknown>): AgentCreditWindow[] {
+    const limits = arrayValue(utilization.limits)
+      .map((entry) => recordValue(entry))
+      .filter((entry): entry is Record<string, unknown> => entry !== null);
+
+    const sessionLimit = limits.find((entry) => stringValue(entry.kind) === 'session')
+      ?? limits.find((entry) => stringValue(entry.group) === 'session')
+      ?? null;
+    const weeklyAllLimit = limits.find((entry) => stringValue(entry.kind) === 'weekly_all')
+      ?? limits.find((entry) => stringValue(entry.group) === 'weekly' && !recordValue(entry.scope))
+      ?? null;
+    const scopedWeeklyLimit = limits.find((entry) => isFableWeeklyLimit(entry))
+      ?? limits.find((entry) => stringValue(entry.kind) === 'weekly_scoped')
+      ?? null;
+
+    return [
+      limitWindow('five-hour', '5h', sessionLimit, FIVE_HOURS_MS)
+        ?? utilizationWindow('five-hour', '5h', recordValue(utilization.five_hour), FIVE_HOURS_MS),
+      limitWindow('weekly-all', 'W', weeklyAllLimit, SEVEN_DAYS_MS)
+        ?? utilizationWindow('weekly-all', 'W', recordValue(utilization.seven_day), SEVEN_DAYS_MS),
+      limitWindow('weekly-fable', 'F', scopedWeeklyLimit, SEVEN_DAYS_MS),
+    ].filter((window): window is AgentCreditWindow => window !== null);
   }
 
   private async codexCreditStatus(): Promise<AgentCreditStatus | null> {
@@ -66,14 +149,23 @@ export class CreditScanner {
   private codexStatusFromRateLimits(rateLimits: Record<string, unknown>): AgentCreditStatus {
     const { fiveHour, weekly } = classifyCodexRateLimitWindows(rateLimits);
     const credits = rateLimits.credits as Record<string, unknown> | undefined;
+    const weeklyUsedPercent = percentValue(weekly?.usedPercent);
+    const weeklyResetAtMs = dateFromUnixSeconds(weekly?.resetsAt);
 
     return {
       fiveHourRemainingPercent: remainingPercentFromUsedPercent(fiveHour?.usedPercent),
-      weeklyRemainingPercent: remainingPercentFromUsedPercent(weekly?.usedPercent),
+      weeklyRemainingPercent: remainingPercentFromUsedPercent(weeklyUsedPercent),
       fiveHourResetAtMs: dateFromUnixSeconds(fiveHour?.resetsAt),
-      weeklyResetAtMs: dateFromUnixSeconds(weekly?.resetsAt),
+      weeklyResetAtMs,
       unlimited: boolValue(credits?.unlimited) ?? false,
       source: 'codex-app-server',
+      windows: [{
+        id: 'weekly',
+        label: 'W',
+        usedPercent: weeklyUsedPercent,
+        resetAtMs: weeklyResetAtMs,
+        windowMs: SEVEN_DAYS_MS,
+      }],
     };
   }
 
@@ -147,8 +239,63 @@ export class CreditScanner {
 }
 
 function remainingPercentFromUsedPercent(value: unknown): number | null {
-  const used = numberValue(value);
+  const used = percentValue(value);
   return used === null ? null : clampPercent(100 - used);
+}
+
+function limitWindow(
+  id: string,
+  label: string,
+  limit: Record<string, unknown> | null,
+  windowMs: number,
+): AgentCreditWindow | null {
+  if (!limit) {
+    return null;
+  }
+
+  const usedPercent = percentValue(limit.percent);
+  const resetAtMs = dateFromIsoString(limit.resets_at);
+  if (usedPercent === null && resetAtMs === null) {
+    return null;
+  }
+
+  return { id, label, usedPercent, resetAtMs, windowMs };
+}
+
+function utilizationWindow(
+  id: string,
+  label: string,
+  window: Record<string, unknown> | null,
+  windowMs: number,
+): AgentCreditWindow | null {
+  if (!window) {
+    return null;
+  }
+
+  const usedPercent = percentValue(window.utilization);
+  const resetAtMs = dateFromIsoString(window.resets_at);
+  if (usedPercent === null && resetAtMs === null) {
+    return null;
+  }
+
+  return { id, label, usedPercent, resetAtMs, windowMs };
+}
+
+function isFableWeeklyLimit(limit: Record<string, unknown>): boolean {
+  if (stringValue(limit.kind) !== 'weekly_scoped') {
+    return false;
+  }
+
+  const scope = recordValue(limit.scope);
+  const model = recordValue(scope?.model);
+  const modelId = stringValue(model?.id)?.toLowerCase() ?? '';
+  const displayName = stringValue(model?.display_name)?.toLowerCase() ?? '';
+  return modelId.includes('fable') || displayName.includes('fable');
+}
+
+function percentValue(value: unknown): number | null {
+  const percent = numberValue(value);
+  return percent === null ? null : clampPercent(percent);
 }
 
 function clampPercent(value: number): number {
@@ -179,9 +326,33 @@ function boolValue(value: unknown): boolean | null {
   return null;
 }
 
+function dateFromIsoString(value: unknown): number | null {
+  const text = stringValue(value);
+  if (!text) {
+    return null;
+  }
+  const time = new Date(text).getTime();
+  return Number.isFinite(time) ? time : null;
+}
+
 function dateFromUnixSeconds(value: unknown): number | null {
   const seconds = numberValue(value);
   return seconds && seconds > 0 ? seconds * 1000 : null;
+}
+
+function recordValue(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null;
+  }
+  return value as Record<string, unknown>;
+}
+
+function arrayValue(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : [];
+}
+
+function stringValue(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
 
 function parseJson<T>(text: string | null | undefined): T | null {

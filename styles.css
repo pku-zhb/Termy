@@ -2332,11 +2332,12 @@
   margin-left: 8px;
 }
 
-/* ===================== Codex credit ===================== */
+/* ===================== Agent credits ===================== */
 .termy-agent-monitor {
   display: flex;
   align-items: center;
   justify-content: flex-end;
+  gap: 4px;
   flex: 0 0 auto;
   min-height: 0;
   margin-left: 4px;
@@ -2350,12 +2351,16 @@
 .termy-agent-credit {
   display: inline-flex;
   align-items: center;
-  gap: 7px;
+  gap: 6px;
   height: 28px;
   padding: 0 8px;
   border: 1px solid var(--background-modifier-border);
   border-radius: var(--radius-s);
   background-color: var(--background-primary);
+}
+
+.termy-agent-credit.is-empty-credit {
+  opacity: 0.58;
 }
 
 .termy-agent-credit-icon {
@@ -2367,8 +2372,20 @@
 .termy-agent-credit-meters {
   display: inline-flex;
   align-items: flex-end;
-  gap: 3px;
+  gap: 4px;
   height: 19px;
+}
+
+.termy-agent-credit-window {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 19px;
+}
+
+.termy-agent-credit-window + .termy-agent-credit-window {
+  padding-left: 4px;
+  border-left: 1px solid color-mix(in srgb, var(--background-modifier-border) 72%, transparent);
 }
 
 .termy-agent-credit-meter {
@@ -2382,6 +2399,20 @@
   --termy-agent-meter-glow: color-mix(in srgb, var(--interactive-accent) 32%, transparent);
   background-color: color-mix(in srgb, var(--interactive-accent) 10%, var(--background-modifier-border));
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--interactive-accent) 18%, transparent);
+}
+
+.termy-agent-credit.is-claude .termy-agent-credit-meter.is-usage {
+  --termy-agent-meter-color: color-mix(in srgb, var(--color-orange, #d9825b) 82%, var(--text-normal));
+  --termy-agent-meter-glow: color-mix(in srgb, var(--color-orange, #d9825b) 28%, transparent);
+  background-color: color-mix(in srgb, var(--color-orange, #d9825b) 11%, var(--background-modifier-border));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-orange, #d9825b) 20%, transparent);
+}
+
+.termy-agent-credit.is-claude .termy-agent-credit-window.is-weekly-fable .termy-agent-credit-meter.is-usage {
+  --termy-agent-meter-color: color-mix(in srgb, var(--color-purple, #8f6bdc) 78%, var(--text-normal));
+  --termy-agent-meter-glow: color-mix(in srgb, var(--color-purple, #8f6bdc) 28%, transparent);
+  background-color: color-mix(in srgb, var(--color-purple, #8f6bdc) 11%, var(--background-modifier-border));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-purple, #8f6bdc) 20%, transparent);
 }
 
 .termy-agent-credit-meter.is-reset {

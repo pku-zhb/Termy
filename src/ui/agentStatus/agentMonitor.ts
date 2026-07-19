@@ -1,9 +1,17 @@
 import type {
   AgentCreditStatus,
+  AgentCreditWindow,
   AgentSnapshot,
   AgentStatusService,
 } from '../../services/agentStatus/agentStatusService';
-import { CODEX_ICON } from '../terminal/statusIcons';
+import { CLAUDE_ICON, CODEX_ICON } from '../terminal/statusIcons';
+
+interface CreditPillSpec {
+  name: string;
+  className: string;
+  iconSrc: string;
+  credit: AgentCreditStatus | null;
+}
 
 export class AgentMonitor {
   private readonly rootEl: HTMLElement;
@@ -46,27 +54,68 @@ export class AgentMonitor {
 
   private render(snapshot: AgentSnapshot | null): void {
     const root = this.rootEl;
-    const credit = snapshot?.credits.codex ?? null;
     root.empty();
     root.toggleClass('is-loading', snapshot === null || snapshot.generatedAtMs === 0);
 
-    const pill = root.createDiv('termy-agent-credit is-codex');
-    pill.toggleClass('is-empty-credit', !credit);
-    pill.title = credit ? creditTooltip(credit) : 'Codex usage: n/a';
+    const specs: CreditPillSpec[] = [
+      {
+        name: 'Claude',
+        className: 'is-claude',
+        iconSrc: CLAUDE_ICON,
+        credit: snapshot?.credits.claude ?? null,
+      },
+      {
+        name: 'Codex',
+        className: 'is-codex',
+        iconSrc: CODEX_ICON,
+        credit: snapshot?.credits.codex ?? null,
+      },
+    ];
 
-    const icon = pill.createEl('img', { cls: 'termy-agent-credit-icon' });
-    icon.alt = 'Codex';
-    icon.src = CODEX_ICON;
-
-    const meters = pill.createDiv('termy-agent-credit-meters');
-    appendMeter(meters, credit ? usedPercent(credit.weeklyRemainingPercent) : null, 'weekly usage', 'is-usage');
-    appendMeter(
-      meters,
-      credit ? resetElapsedPercent(credit.weeklyResetAtMs, 7 * 24 * 60 * 60 * 1000) : null,
-      'weekly reset',
-      'is-reset',
-    );
+    for (const spec of specs) {
+      appendCreditPill(root, spec);
+    }
   }
+}
+
+function appendCreditPill(parent: HTMLElement, spec: CreditPillSpec): void {
+  const pill = parent.createDiv(`termy-agent-credit ${spec.className}`);
+  pill.toggleClass('is-empty-credit', !spec.credit);
+  pill.title = spec.credit ? creditTooltip(spec.name, spec.credit) : `${spec.name} usage: n/a`;
+
+  const icon = pill.createEl('img', { cls: 'termy-agent-credit-icon' });
+  icon.alt = spec.name;
+  icon.src = spec.iconSrc;
+
+  const meters = pill.createDiv('termy-agent-credit-meters');
+  for (const window of creditWindows(spec.credit)) {
+    appendWindowMeters(meters, spec.name, window);
+  }
+}
+
+function creditWindows(credit: AgentCreditStatus | null): AgentCreditWindow[] {
+  if (!credit || credit.windows.length === 0) {
+    return [{
+      id: 'weekly',
+      label: 'W',
+      usedPercent: null,
+      resetAtMs: null,
+      windowMs: 7 * 24 * 60 * 60 * 1000,
+    }];
+  }
+  return credit.windows;
+}
+
+function appendWindowMeters(parent: HTMLElement, productName: string, window: AgentCreditWindow): void {
+  const group = parent.createSpan(`termy-agent-credit-window is-${window.id}`);
+  group.title = `${productName} ${window.label}: usage ${displayPercent(window.usedPercent)}, reset ${displayResetTime(window.resetAtMs)}`;
+  appendMeter(group, window.usedPercent, `${productName} ${window.label} usage`, 'is-usage');
+  appendMeter(
+    group,
+    resetElapsedPercent(window.resetAtMs, window.windowMs),
+    `${productName} ${window.label} reset`,
+    'is-reset',
+  );
 }
 
 function appendMeter(parent: HTMLElement, percent: number | null, title: string, className: string): void {
@@ -76,18 +125,30 @@ function appendMeter(parent: HTMLElement, percent: number | null, title: string,
   meter.title = percent === null ? `${title}: n/a` : `${title}: ${percent}%`;
 }
 
-function creditTooltip(credit: AgentCreditStatus): string {
+function creditTooltip(productName: string, credit: AgentCreditStatus): string {
   if (credit.unlimited) {
-    return `Codex: unlimited · ${credit.source}`;
+    return `${productName}: unlimited · ${credit.source}`;
   }
+
+  const windows = credit.windows.length > 0
+    ? credit.windows
+    : [{
+        id: 'weekly',
+        label: 'W',
+        usedPercent: usedPercent(credit.weeklyRemainingPercent),
+        resetAtMs: credit.weeklyResetAtMs,
+        windowMs: 7 * 24 * 60 * 60 * 1000,
+      }];
+
   return [
-    `Codex · ${credit.source}`,
-    `weekly usage ${displayUsedPercent(credit.weeklyRemainingPercent)}, reset ${displayResetTime(credit.weeklyResetAtMs)}`,
+    `${productName} · ${credit.source}`,
+    ...windows.map((window) => (
+      `${window.label} usage ${displayPercent(window.usedPercent)}, reset ${displayResetTime(window.resetAtMs)}`
+    )),
   ].join('\n');
 }
 
-function displayUsedPercent(remainingPercent: number | null): string {
-  const percent = usedPercent(remainingPercent);
+function displayPercent(percent: number | null): string {
   return percent === null ? 'n/a' : `${percent}%`;
 }
 
@@ -95,8 +156,8 @@ function usedPercent(remainingPercent: number | null): number | null {
   return remainingPercent === null ? null : clampPercent(100 - remainingPercent);
 }
 
-function resetElapsedPercent(resetAtMs: number | null, windowMs: number): number | null {
-  if (!resetAtMs) {
+function resetElapsedPercent(resetAtMs: number | null, windowMs: number | null): number | null {
+  if (!resetAtMs || !windowMs) {
     return null;
   }
   const remainingMs = resetAtMs - Date.now();

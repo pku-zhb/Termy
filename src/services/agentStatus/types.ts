@@ -24,6 +24,14 @@ export interface AgentSnapshot {
   credits: AgentCreditSnapshot;
 }
 
+export interface AgentCreditWindow {
+  id: string;
+  label: string;
+  usedPercent: number | null;
+  resetAtMs: number | null;
+  windowMs: number | null;
+}
+
 export interface AgentCreditStatus {
   fiveHourRemainingPercent: number | null;
   weeklyRemainingPercent: number | null;
@@ -31,15 +39,18 @@ export interface AgentCreditStatus {
   weeklyResetAtMs: number | null;
   unlimited: boolean;
   source: string;
+  windows: AgentCreditWindow[];
 }
 
 export interface AgentCreditSnapshot {
   generatedAtMs: number;
+  claude: AgentCreditStatus | null;
   codex: AgentCreditStatus | null;
 }
 
 export const EMPTY_AGENT_CREDIT_SNAPSHOT: AgentCreditSnapshot = {
   generatedAtMs: 0,
+  claude: null,
   codex: null,
 };
 

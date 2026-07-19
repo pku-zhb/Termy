@@ -153,6 +153,7 @@ function replaceMissingCreditValues(
 ): AgentCreditSnapshot {
   return {
     generatedAtMs: credits.generatedAtMs,
+    claude: hasDisplayableUsage(credits.claude) ? credits.claude : previous.claude,
     codex: hasDisplayableUsage(credits.codex) ? credits.codex : previous.codex,
   };
 }
@@ -162,7 +163,7 @@ function nextCreditRefreshInterval(
   refreshIntervalMs: number,
   retryIntervalMs: number,
 ): number {
-  return hasDisplayableUsage(credits.codex)
+  return hasDisplayableUsage(credits.claude) || hasDisplayableUsage(credits.codex)
     ? refreshIntervalMs
     : retryIntervalMs;
 }
@@ -170,6 +171,7 @@ function nextCreditRefreshInterval(
 function hasDisplayableUsage(status: AgentCreditStatus | null): status is AgentCreditStatus {
   return Boolean(status && (
     status.unlimited
+    || status.windows.some((window) => window.usedPercent !== null || window.resetAtMs !== null)
     || status.fiveHourRemainingPercent !== null
     || status.weeklyRemainingPercent !== null
     || status.fiveHourResetAtMs !== null
@@ -181,6 +183,7 @@ export type {
   AgentClient,
   AgentCreditSnapshot,
   AgentCreditStatus,
+  AgentCreditWindow,
   AgentKind,
   AgentSnapshot,
   AgentTmuxClient,
