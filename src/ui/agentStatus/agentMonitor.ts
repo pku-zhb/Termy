@@ -4,6 +4,7 @@ import type {
   AgentSnapshot,
   AgentStatusService,
 } from '../../services/agentStatus/agentStatusService';
+import { resetElapsedPercent } from '../../services/agentStatus/creditProgress';
 import { CLAUDE_ICON, CODEX_ICON } from '../terminal/statusIcons';
 
 interface CreditPillSpec {
@@ -154,17 +155,6 @@ function displayPercent(percent: number | null): string {
 
 function usedPercent(remainingPercent: number | null): number | null {
   return remainingPercent === null ? null : clampPercent(100 - remainingPercent);
-}
-
-function resetElapsedPercent(resetAtMs: number | null, windowMs: number | null): number | null {
-  if (!resetAtMs || !windowMs) {
-    return null;
-  }
-  const remainingMs = resetAtMs - Date.now();
-  if (remainingMs <= 0) {
-    return 100;
-  }
-  return clampPercent(((windowMs - remainingMs) / windowMs) * 100);
 }
 
 function clampPercent(value: number): number {
