@@ -164,6 +164,8 @@ export const ru: TranslationKeys = {
     terminal: {
       appearanceSettings: 'Настройки внешнего вида',
       behaviorSettings: 'Настройки поведения',
+      agentUsageTracking: 'Отслеживание использования Agent',
+      agentUsageTrackingDesc: 'Обновлять данные использования Claude/Codex и показывать индикаторы на панели вкладок Termy',
       backendSettings: 'Backend (termy-server)',
       backendStatus: 'Backend binary status',
       backendStatusFound: '✅ Found: {{path}}',
