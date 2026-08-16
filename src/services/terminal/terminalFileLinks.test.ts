@@ -100,7 +100,7 @@ test('normalizeTerminalFileUriLinkTarget still trims prose after a dotted direct
 
 test('normalizeTerminalFileUriLinkTarget continues past dotted identifiers to a common extension', () => {
   // 实测回归：股票代码里的 ".HK " 不是链接结尾，真正的文件扩展名在后面的 ".md"。
-  const uri = 'file:///Users/zhuhuibin/Nutstore Files/Nutstore/00Temp/0133.HK 招商局中国基金研究 20260717.md';
+  const uri = 'file:///Users/zhuhuibin/Harbor Drive/00Temp/0133.HK 招商局中国基金研究 20260717.md';
   assert.equal(normalizeTerminalFileUriLinkTarget(uri), uri);
 });
 
@@ -131,7 +131,7 @@ test('parseTerminalFileUriLinks detects raw file URLs with dotted directory segm
 });
 
 test('parseTerminalFileUriLinks keeps screenshot file URLs with dotted identifiers intact', () => {
-  const uri = 'file:///Users/zhuhuibin/Nutstore Files/Nutstore/00Temp/0133.HK 招商局中国基金研究 20260717.md';
+  const uri = 'file:///Users/zhuhuibin/Harbor Drive/00Temp/0133.HK 招商局中国基金研究 20260717.md';
   const text = `报告:${uri}`;
 
   assert.deepEqual(parseTerminalFileUriLinks(text), [

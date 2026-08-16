@@ -236,7 +236,7 @@ test('link window records junctions so word-wrap-eaten spaces can be recovered',
 
 test('link window preserves a dotted ticker before the actual extension', () => {
   // 截图回归：硬换行吃掉 "00 Temp" 中的空格，同时文件名里的 ".HK " 不能提前截断。
-  const row0 = '报告:file:///Users/zhuhuibin/Nutstore Files/Nutstore/00';
+  const row0 = '报告:file:///Users/zhuhuibin/Harbor Drive/00';
   const row1 = 'Temp/0133.HK 招商局中国基金研究 20260717.md';
   const buffer = bufferFromLines([bufferLineFromText(row0), bufferLineFromText(row1)]);
 
@@ -246,7 +246,7 @@ test('link window preserves a dotted ticker before the actual extension', () => 
   assert.ok(link);
   assert.equal(
     link.uri,
-    'file:///Users/zhuhuibin/Nutstore Files/Nutstore/00Temp/0133.HK 招商局中国基金研究 20260717.md',
+    'file:///Users/zhuhuibin/Harbor Drive/00Temp/0133.HK 招商局中国基金研究 20260717.md',
   );
 
   const junctions = window.hardJunctions
@@ -254,7 +254,7 @@ test('link window preserves a dotted ticker before the actual extension', () => 
     .map((junction) => junction - link.startIndex);
   const candidates = buildTerminalFileUriJunctionCandidates(link.uri, junctions);
   assert.ok(candidates.includes(
-    'file:///Users/zhuhuibin/Nutstore Files/Nutstore/00 Temp/0133.HK 招商局中国基金研究 20260717.md',
+    'file:///Users/zhuhuibin/Harbor Drive/00 Temp/0133.HK 招商局中国基金研究 20260717.md',
   ));
 });
 
@@ -321,7 +321,7 @@ test('mid-line link references join across wraps like line-start ones', () => {
 
 test('link window joins Claude file URLs split before encoded spaces', () => {
   const rows = [
-    'file:///Users/zhuhuibin/Nutstore%20Files/Nutstore/01%20Research/01%20AI',
+    'file:///Users/zhuhuibin/Harbor%20Drive/01%20Research/01%20AI',
     '%20SEMI%20TECH/08%20NeoCloud/NBIS-CRWV-IREN-订单结构研究.md',
   ];
   const buffer = bufferFromLines(rows.map((row) => bufferLineFromText(row)));
