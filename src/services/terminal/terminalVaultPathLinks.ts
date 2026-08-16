@@ -1,7 +1,7 @@
 // Linkify bare filesystem paths printed in terminal output (no file:// prefix),
 // e.g. Codex citing files as `[name](</Users/.../note.md>)` whose renderer collapses
 // the markdown into a plain `$HOME`-relative path like
-// `Nutstore Files/Nutstore/00 Temp/note.md`. We anchor on a filename extension, then
+// `Harbor Drive/00 Temp/note.md`. We anchor on a filename extension, then
 // walk left across whitespace-delimited word starts and ask the injected resolver
 // whether the candidate (absolute / $HOME-relative / vault-relative) maps to a real
 // openable vault file. The longest candidate that resolves wins, which also settles
