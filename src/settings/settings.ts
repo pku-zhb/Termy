@@ -83,6 +83,9 @@ export interface TerminalSettings {
   // Scrollback buffer size (in lines)
   scrollback: number;
 
+  // Maintain Claude/Codex usage data and show usage meters in the Termy tab bar.
+  agentUsageTrackingEnabled: boolean;
+
   // Feature visibility settings
   visibility: VisibilityConfig;
 
@@ -250,6 +253,7 @@ export const DEFAULT_TERMINAL_SETTINGS: TerminalSettings = {
   useObsidianTheme: true,
   preferredRenderer: 'canvas',
   scrollback: 1000,
+  agentUsageTrackingEnabled: false,
   backgroundImageOpacity: 0.5,
   backgroundImageSize: 'cover',
   backgroundImagePosition: 'center',

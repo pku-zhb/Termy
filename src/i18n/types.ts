@@ -181,6 +181,8 @@ export interface TranslationKeys {
     terminal: {
       appearanceSettings: string;
       behaviorSettings: string;
+      agentUsageTracking: string;
+      agentUsageTrackingDesc: string;
       backendSettings: string;
       backendStatus: string;
       backendStatusFound: string;

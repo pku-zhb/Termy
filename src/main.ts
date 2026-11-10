@@ -99,10 +99,22 @@ export default class TerminalPlugin extends Plugin {
     if (!this._agentStatusService) {
       debugLog('[TerminalPlugin] Initializing AgentStatusService...');
       const { AgentStatusService } = await import('./services/agentStatus/agentStatusService');
-      this._agentStatusService = new AgentStatusService();
+      this._agentStatusService = new AgentStatusService({
+        creditTrackingEnabled: this.settings.agentUsageTrackingEnabled,
+      });
       debugLog('[TerminalPlugin] AgentStatusService initialized');
     }
     return this._agentStatusService;
+  }
+
+  applyAgentUsageTrackingSetting(enabled: boolean): void {
+    this._agentStatusService?.setCreditTrackingEnabled(enabled);
+    for (const leaf of this.app.workspace.getLeavesOfType(TERMINAL_VIEW_TYPE)) {
+      const view = leaf.view;
+      if (view instanceof TerminalView) {
+        view.setAgentUsageDisplayEnabled(enabled);
+      }
+    }
   }
 
   getTerminalRestoreStore(): TerminalRestoreStore {
@@ -1449,6 +1461,7 @@ class TerminalViewPlaceholder extends TerminalView {
       null,
       null,
       plugin.getTerminalRestoreStore(),
+      plugin.settings.agentUsageTrackingEnabled,
     );
     this.plugin = plugin;
   }

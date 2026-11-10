@@ -164,6 +164,8 @@ export const ja: TranslationKeys = {
     terminal: {
       appearanceSettings: '外観設定',
       behaviorSettings: '動作設定',
+      agentUsageTracking: 'Agent 使用量トラッキング',
+      agentUsageTrackingDesc: 'Claude/Codex の使用量データを更新し、Termy のタブバーにメーターを表示します',
       backendSettings: 'Backend (termy-server)',
       backendStatus: 'Backend binary status',
       backendStatusFound: '✅ Found: {{path}}',

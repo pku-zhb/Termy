@@ -16,6 +16,7 @@ export interface AgentStatusServiceOptions {
   scanIntervalMs?: number;
   creditRefreshIntervalMs?: number;
   creditRetryIntervalMs?: number;
+  creditTrackingEnabled?: boolean;
   runtime?: AgentStatusRuntime;
 }
 
@@ -32,6 +33,7 @@ export class AgentStatusService {
   private scanInFlight = false;
   private creditRefreshInFlight = false;
   private nextCreditRefreshAt = 0;
+  private creditTrackingEnabled: boolean;
 
   constructor(options: AgentStatusServiceOptions = {}) {
     const runtime = options.runtime ?? createElectronAgentStatusRuntime();
@@ -40,6 +42,7 @@ export class AgentStatusService {
     this.scanIntervalMs = options.scanIntervalMs ?? 5000;
     this.creditRefreshIntervalMs = options.creditRefreshIntervalMs ?? 5 * 60 * 1000;
     this.creditRetryIntervalMs = options.creditRetryIntervalMs ?? 60 * 1000;
+    this.creditTrackingEnabled = options.creditTrackingEnabled ?? true;
   }
 
   getSnapshot(): AgentSnapshot {
@@ -74,6 +77,25 @@ export class AgentStatusService {
     if (this.timer !== null) {
       window.clearInterval(this.timer);
       this.timer = null;
+    }
+  }
+
+  setCreditTrackingEnabled(enabled: boolean): void {
+    if (this.creditTrackingEnabled === enabled) {
+      return;
+    }
+    this.creditTrackingEnabled = enabled;
+    this.nextCreditRefreshAt = enabled ? 0 : Number.POSITIVE_INFINITY;
+
+    if (!enabled) {
+      this.credits = EMPTY_AGENT_CREDIT_SNAPSHOT;
+      this.snapshot = { ...this.snapshot, credits: this.credits };
+      this.emit(this.snapshot);
+      return;
+    }
+
+    if (this.listeners.size > 0) {
+      void this.refresh(true);
     }
   }
 
@@ -119,6 +141,9 @@ export class AgentStatusService {
   }
 
   private async refreshCreditsIfNeeded(force: boolean): Promise<void> {
+    if (!this.creditTrackingEnabled) {
+      return;
+    }
     if (this.creditRefreshInFlight) {
       return;
     }
@@ -129,6 +154,9 @@ export class AgentStatusService {
     this.creditRefreshInFlight = true;
     try {
       const credits = await this.creditScanner.scan();
+      if (!this.creditTrackingEnabled) {
+        return;
+      }
       this.credits = replaceMissingCreditValues(credits, this.credits);
       this.nextCreditRefreshAt = Date.now() + nextCreditRefreshInterval(
         this.credits,

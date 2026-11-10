@@ -164,6 +164,8 @@ export const zhCN: TranslationKeys = {
     terminal: {
       appearanceSettings: '外观设置',
       behaviorSettings: '行为设置',
+      agentUsageTracking: 'Agent 用量追踪',
+      agentUsageTrackingDesc: '维护 Claude/Codex 用量数据，并在 Termy 的 tab 栏显示用量柱',
       backendSettings: '后端 (termy-server)',
       backendStatus: '后端二进制状态',
       backendStatusFound: '✅ 已找到：{{path}}',

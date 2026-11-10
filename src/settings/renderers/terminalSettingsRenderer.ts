@@ -1533,6 +1533,17 @@ export class TerminalSettingsRenderer extends BaseSettingsRenderer {
       .setName(t('settingsDetails.terminal.behaviorSettings'))
       .setHeading();
 
+    new Setting(behaviorCard)
+      .setName(t('settingsDetails.terminal.agentUsageTracking'))
+      .setDesc(t('settingsDetails.terminal.agentUsageTrackingDesc'))
+      .addToggle(toggle => toggle
+        .setValue(this.context.plugin.settings.agentUsageTrackingEnabled)
+        .onChange((value) => {
+          this.context.plugin.settings.agentUsageTrackingEnabled = value;
+          this.context.plugin.applyAgentUsageTrackingSetting(value);
+          void this.saveSettings();
+        }));
+
     // Scrollback buffer size
     new Setting(behaviorCard)
       .setName(t('settingsDetails.terminal.scrollback'))

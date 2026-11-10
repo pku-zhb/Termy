@@ -264,6 +264,7 @@ export class TerminalView extends ItemView {
   private tabs: TerminalTabEntry[] = [];
   private activeIndex = -1;
   private agentMonitor: AgentMonitor | null = null;
+  private agentUsageDisplayEnabled: boolean;
   private agentStatusUnsubscribe: (() => void) | null = null;
   private latestAgentSnapshot: AgentSnapshot | null = null;
   private tabBarEl: HTMLElement | null = null;
@@ -302,11 +303,13 @@ export class TerminalView extends ItemView {
     terminalService: TerminalService | null,
     agentStatusService: AgentStatusService | null = null,
     restoreStore: TerminalRestoreStore | null = null,
+    agentUsageDisplayEnabled = true,
   ) {
     super(leaf);
     this.terminalService = terminalService;
     this.agentStatusService = agentStatusService;
     this.restoreStore = restoreStore;
+    this.agentUsageDisplayEnabled = agentUsageDisplayEnabled;
     this.fs = window.require('fs') as FsModule;
     const os = window.require('os') as OsModule;
     this.homeDir = os.homedir();
@@ -380,7 +383,7 @@ export class TerminalView extends ItemView {
     // Tabs and Codex usage share one row. Tabs scroll while usage stays pinned.
     this.tabBarEl = container.createDiv('termy-tab-bar');
     this.tabListEl = this.tabBarEl.createDiv('termy-tab-list');
-    this.agentMonitor = new AgentMonitor(this.tabBarEl, this.agentStatusService);
+    this.updateAgentMonitor();
     this.bindAgentStatusSnapshot();
 
     // Create the search bar container
@@ -556,6 +559,27 @@ export class TerminalView extends ItemView {
     this.agentStatusService = agentStatusService;
     this.agentMonitor?.setService(agentStatusService);
     this.bindAgentStatusSnapshot();
+  }
+
+  setAgentUsageDisplayEnabled(enabled: boolean): void {
+    this.agentUsageDisplayEnabled = enabled;
+    this.updateAgentMonitor();
+  }
+
+  private updateAgentMonitor(): void {
+    if (!this.tabBarEl) {
+      return;
+    }
+    if (!this.agentUsageDisplayEnabled) {
+      this.agentMonitor?.dispose();
+      this.agentMonitor = null;
+      return;
+    }
+    if (!this.agentMonitor) {
+      this.agentMonitor = new AgentMonitor(this.tabBarEl, this.agentStatusService);
+      return;
+    }
+    this.agentMonitor.setService(this.agentStatusService);
   }
 
   private bindAgentStatusSnapshot(): void {
